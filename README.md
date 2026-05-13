@@ -1,8 +1,8 @@
 # The Terminal
 
 > **A self-hosted Bloomberg-style research and earnings-trading dashboard for one investor — with an AI agent that reads your book overnight, flags what changed, and writes you concrete trade plans.**
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/ronitg1/the-terminal&env=NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY,NEXT_PUBLIC_SITE_URL,LLM_PROVIDER,DEEPSEEK_API_KEY,TAVILY_API_KEY,FINNHUB_API_KEY,CRON_SECRET&envDescription=See%20SETUP.md%20for%20how%20to%20get%20each%20key&envLink=https://github.com/ronitg1/the-terminal/blob/main/SETUP.md)
+>
+> 💡 **Best run locally** via `npm run dev` — see the [Local vs cloud](#local-vs-cloud) comparison below for why.
 
 Bloomberg is $24,000/year, locked to a single physical terminal, and assumes you have a team of analysts. This is **your** version of the parts that actually matter for a discretionary book, running on your own infrastructure for ~$5/month in API costs.
 
@@ -116,19 +116,42 @@ Live demo (you'll need an account to see anything past login):
 
 ## Get running
 
-**[10-minute setup → SETUP.md](SETUP.md)**
+> 💡 **Run it locally — that's the recommended path.** The multi-agent pipeline does ~6 LLM calls per ticker (~30-60s wall time). Vercel's free Hobby plan kills serverless functions at 60 seconds, so the agent gets truncated on slow LLM days. Running locally via `npm run dev` removes the timeout entirely — every run completes cleanly. Cloud deploy is for "access it from anywhere" — local is for "I want the agent to actually finish thinking."
 
-Or just hit the Deploy button at the top. You'll need free accounts at Supabase, DeepSeek, Tavily, and Finnhub — all walked through step-by-step in SETUP.md.
+**[Full step-by-step → SETUP.md](SETUP.md)**
 
 ```bash
-# Local dev
+# Local — recommended for daily research use
 git clone https://github.com/ronitg1/the-terminal.git
 cd the-terminal
 npm install
-cp .env.local.example .env.local        # fill in the keys
-# Paste supabase/setup.sql into Supabase SQL Editor → Run
+cp .env.local.example .env.local        # fill in the keys (see SETUP.md)
+# Open supabase/setup.sql → paste into Supabase SQL Editor → Run
 npm run dev
 ```
+
+Open `http://localhost:3000` → enter your email → magic link → you're in.
+
+### Local vs cloud
+
+| | Local (`npm run dev`) | Vercel Hobby (free) | Vercel Pro ($20/mo) |
+|---|---|---|---|
+| Agent runs reliably | ✅ no timeout | ⚠️ 60s cap, partial on slow LLM days | ✅ 300s cap |
+| Access from phone / other device | ❌ | ✅ | ✅ |
+| Automatic crons (thesis refresh, options scan, Sunday email) | ❌ (run manually) | ⚠️ daily-only + 60s cap | ✅ |
+| Push notifications | ⚠️ only when laptop is on | ✅ | ✅ |
+| Cost | $0 hosting | $0 | $20/mo |
+| Best for | active research at a desk | shared link / demo | always-on alerting |
+
+**Recommendation**: run locally for primary use. If you want push notifications and weekly email to keep working when your laptop is off, deploy to Vercel — and **upgrade to Pro** if you want the cron-driven thesis refreshes to reliably complete.
+
+You can run both at once. The Vercel deploy and your local dev server share the same Supabase database, so your book/journal/theses stay in sync.
+
+### One-click cloud deploy (optional)
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/ronitg1/the-terminal&env=NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY,NEXT_PUBLIC_SITE_URL,LLM_PROVIDER,DEEPSEEK_API_KEY,TAVILY_API_KEY,FINNHUB_API_KEY,CRON_SECRET&envDescription=See%20SETUP.md%20for%20how%20to%20get%20each%20key&envLink=https://github.com/ronitg1/the-terminal/blob/main/SETUP.md)
+
+(Use this if you want a shareable URL — but expect occasional 504s on Hobby. Upgrade to Pro for reliability.)
 
 ---
 

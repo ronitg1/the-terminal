@@ -2,6 +2,8 @@
 
 Follow this top-to-bottom. Total time: **~15 minutes** for the local setup, **+10 minutes** if you also deploy to Vercel.
 
+> 💡 **Run it locally — that's the recommended path for daily use.** The multi-agent AI pipeline does 6 LLM calls per ticker (~30-60 seconds wall time). Local Node.js has no execution timeout — the agent always finishes cleanly. Vercel Hobby kills functions at 60 seconds, which can truncate the agent on slow LLM days. See [Local vs cloud](#local-vs-cloud-deployment) at the bottom.
+
 Each step says what you're about to do, what's free, and what to do if something goes wrong.
 
 ---
@@ -194,9 +196,29 @@ What triggers a push:
 
 ---
 
-## Deploy to Vercel
+## Local vs cloud deployment
 
-Once everything works locally, deploying takes ~10 minutes.
+| | Local (`npm run dev`) | Vercel Hobby (free) | Vercel Pro ($20/mo) |
+|---|---|---|---|
+| Agent runs reliably | ✅ no timeout | ⚠️ 60s function cap, partial on slow LLM days | ✅ 300s cap |
+| Multi-agent pipeline always completes | ✅ | ❌ sometimes truncated | ✅ |
+| Phone / tablet access | ❌ (LAN only) | ✅ | ✅ |
+| Auto-cron (thesis refresh, options scan, weekly email) | ❌ — run manually | ⚠️ daily-only on Hobby | ✅ multi-daily |
+| Push notifications | ⚠️ only while laptop is on | ✅ | ✅ |
+| Cost | $0 hosting | $0 | $20/mo |
+| Best for | active research at a desk | demo / shared link | always-on alerting |
+
+**The honest recommendation**: run locally. The multi-agent pipeline does ~6 LLM calls per ticker, taking 30-60s total wall time. Vercel Hobby's 60s function ceiling is right at the edge of that — when DeepSeek has a slow moment, runs get killed. Locally, Node.js gives the agent however long it needs.
+
+**Manual cron via local dev**: when you want a thesis refresh, click "Run all T1" in AI Research. When you want the weekly email, click "Send to my email now" in Settings. No automation required for personal use.
+
+If you want push notifications, automatic Sunday emails, and refreshes that fire while you sleep — deploy to Vercel **on the Pro plan**. The Hobby tier works but you'll see occasional 504s on the agent runs.
+
+---
+
+## Deploy to Vercel (optional)
+
+Once everything works locally, deploying takes ~10 minutes. **You probably don't need this for personal use** — see the comparison above. Use this section if you want a shareable demo URL or automatic cron.
 
 ### 1. Push your code to GitHub
 
