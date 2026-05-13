@@ -17,10 +17,16 @@ const BodySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
-const SYSTEM = `You are the assistant to a discretionary investor. Extract structured items from their free-form journal entry.
+const SYSTEM = `You are the assistant to a discretionary investor. They wrote a free-form journal entry — possibly a stream-of-consciousness brain dump after a trading session, a meeting, or while reasoning through a thesis. Your job is twofold:
+
+1. REWRITE the entry into a cleaner, better-structured version that the PM will want to re-read in a week. Use markdown — short sections with bold ## headings, tight bullets, no fluff. PRESERVE every concrete fact, ticker, price, date, and observation. Tighten meandering sentences but DON'T invent details. Keep the PM's voice (declarative, terse). Skip generic advice. If the entry already reads cleanly, return it as-is.
+
+2. EXTRACT structured items the rewritten entry implies: trade ideas, thesis changes, action items, risks. These are surfaced as separate cards in the UI.
 
 Output JSON ONLY:
 {
+  "rewritten": "The polished markdown rewrite. Multi-line. Use ## section headers and - bullets liberally. KEEP IT SHORTER THAN THE ORIGINAL when possible.",
+  "rewriteSummary": "1 sentence describing what you changed (e.g. 'Grouped into Pre-market plan / Trades taken / Watch list. Tightened the FSLR section.').",
   "tradeIdeas": [
     { "symbol": "FSLR", "direction": "long" | "short" | "neutral", "structure": "stock" | "options" | "spread" | "unknown", "rationale": "1 sentence" }
   ],
@@ -37,12 +43,15 @@ Output JSON ONLY:
 }
 
 Rules:
-- Be conservative. If the entry doesn't contain trade ideas, return an empty array — do NOT invent.
+- The rewrite must preserve every concrete fact, ticker, price level, date, and proper noun. You may reorder, condense, and add structure — but never invent or omit material info.
+- Be conservative on extractions. If the entry doesn't contain trade ideas, return an empty array — do NOT invent.
 - ticker fields should be uppercase. Use null when no specific ticker is named.
 - tagsSuggested must be from the fixed list above. Empty array is fine if none apply.
-- No prose outside the JSON. No markdown fences.`;
+- No prose outside the JSON. No markdown fences AROUND the JSON itself — the rewritten field's CONTENTS can (and should) contain markdown.`;
 
 interface OrganizeOutput {
+  rewritten: string;
+  rewriteSummary: string;
   tradeIdeas: Array<{ symbol: string; direction: string; structure: string; rationale: string }>;
   thesisChanges: Array<{ symbol: string; change: string }>;
   actionItems: Array<{ task: string; ticker: string | null; deadline: string | null }>;
@@ -73,8 +82,8 @@ export async function POST(req: NextRequest) {
   const completion = await llmComplete({
     purpose: "thesis",
     system: SYSTEM,
-    user: `JOURNAL ENTRY${parsed.data.date ? ` (${parsed.data.date})` : ""}:\n\n${parsed.data.content}\n\nProduce the JSON extraction now.`,
-    maxTokens: 1500,
+    user: `JOURNAL ENTRY${parsed.data.date ? ` (${parsed.data.date})` : ""}:\n\n${parsed.data.content}\n\nProduce the JSON rewrite + extraction now.`,
+    maxTokens: 4000,
     jsonResponse: true,
   });
 
@@ -90,6 +99,8 @@ export async function POST(req: NextRequest) {
 
   const raw = parseLenientJson<Partial<OrganizeOutput>>(completion.text);
   const out: OrganizeOutput = {
+    rewritten: typeof raw.rewritten === "string" ? raw.rewritten.trim() : "",
+    rewriteSummary: typeof raw.rewriteSummary === "string" ? raw.rewriteSummary.trim() : "",
     tradeIdeas: (raw.tradeIdeas ?? [])
       .filter((x) => x && typeof x.symbol === "string")
       .map((x) => ({

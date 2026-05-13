@@ -19,6 +19,8 @@ type Tag = (typeof TAG_OPTIONS)[number];
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 interface OrganizedOutput {
+  rewritten: string;
+  rewriteSummary: string;
   tradeIdeas: Array<{ symbol: string; direction: string; structure: string; rationale: string }>;
   thesisChanges: Array<{ symbol: string; change: string }>;
   actionItems: Array<{ task: string; ticker: string | null; deadline: string | null }>;
@@ -143,6 +145,12 @@ export default function JournalPage() {
     scheduleSave({ tags: merged });
   }
 
+  function replaceWithRewrite() {
+    if (!organized?.rewritten) return;
+    setContent(organized.rewritten);
+    scheduleSave({ content: organized.rewritten });
+  }
+
   return (
     <div className="grid h-[calc(100vh-7rem)] grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr_20rem]">
       {/* Left: calendar + recent entries + search */}
@@ -240,6 +248,7 @@ export default function JournalPage() {
             organizing={organizing}
             tags={tags}
             onApplyTags={applySuggestedTags}
+            onReplaceWithRewrite={replaceWithRewrite}
           />
         </ErrorBoundary>
         <ErrorBoundary label="Weekly summary">
@@ -363,25 +372,62 @@ function OrganizedPanel({
   organizing,
   tags,
   onApplyTags,
+  onReplaceWithRewrite,
 }: {
   organized: OrganizedOutput | null;
   error: string | null;
   organizing: boolean;
   tags: Tag[];
   onApplyTags: () => void;
+  onReplaceWithRewrite: () => void;
 }) {
+  const [showRewrite, setShowRewrite] = useState(true);
   return (
     <div className="rounded-md border bg-card">
       <div className="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
         AI organize
       </div>
       <div className="space-y-3 p-3 text-xs">
-        {organizing && <div className="text-muted-foreground">Extracting trade ideas, thesis changes, action items, risks…</div>}
+        {organizing && <div className="text-muted-foreground">Rewriting and extracting trade ideas, thesis changes, action items, risks…</div>}
         {error && <div className="rounded-md border border-loss/40 bg-loss/10 p-2 text-loss">{error}</div>}
         {!organized && !organizing && !error && (
           <div className="text-muted-foreground">
-            Write your entry, then click <strong>AI organize</strong> — the agent will extract structured items (trade ideas with tickers, thesis changes, action items, risks).
+            Write your entry, then click <strong>AI organize</strong> — the agent will polish your entry into a structured rewrite AND extract trade ideas, thesis changes, action items, and risks as separate cards.
           </div>
+        )}
+        {organized && organized.rewritten && (
+          <Section title="Polished rewrite">
+            {organized.rewriteSummary && (
+              <div className="mb-1.5 text-[10px] italic text-muted-foreground">
+                {organized.rewriteSummary}
+              </div>
+            )}
+            {showRewrite ? (
+              <div className="rounded-md border bg-secondary/40 p-2 text-[11px] leading-relaxed whitespace-pre-wrap font-mono">
+                {organized.rewritten}
+              </div>
+            ) : (
+              <div className="text-[11px] italic text-muted-foreground">Hidden — click "Show" to re-display.</div>
+            )}
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <Button size="sm" onClick={onReplaceWithRewrite}>
+                Replace my entry
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowRewrite((s) => !s)}>
+                {showRewrite ? "Hide" : "Show"}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigator.clipboard?.writeText(organized.rewritten).catch(() => undefined)}
+              >
+                Copy
+              </Button>
+            </div>
+            <div className="mt-1 text-[10px] text-muted-foreground">
+              Tip: "Replace my entry" autosaves immediately. Original is gone — copy first if you want to keep both.
+            </div>
+          </Section>
         )}
         {organized && (
           <>
