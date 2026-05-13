@@ -12,7 +12,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const PARENT_WAIT_MS = 50_000; // leave 10s margin under the 60s platform cap
+// Hard cap on the parent's wait. Vercel Hobby kills the function at 60s
+// INCLUDING cold-start + Supabase auth + DB lookup, so this needs a large
+// margin. 35s is comfortably safe; anything still in-flight continues running
+// in its own child function and the UI polls /api/agent/feed to pick up
+// late-arriving snapshots.
+const PARENT_WAIT_MS = 35_000;
 
 export async function POST(req: NextRequest) {
   const supabase = createServerSupabase();

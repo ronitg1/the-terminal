@@ -58,8 +58,24 @@ export default function AIResearchPage() {
     setRunningAll(true);
     setRunError(null);
     setPendingSymbols([]);
+
+    // Snapshot which T1 symbols exist NOW so we can poll for fresh snapshots
+    // on all of them even if the parent fetch 504s (children still running).
+    const allT1Symbols = cards.map((c) => c.symbol);
+
     try {
       const res = await fetch("/api/agent/run-all?tier=1", { method: "POST" });
+
+      if (res.status === 504 || res.status === 408) {
+        // Parent dispatcher exceeded Vercel's function timeout — children are
+        // still running in the background. Mark every T1 ticker as pending and
+        // let the polling pick up snapshots as they land.
+        setPendingSymbols(allT1Symbols);
+        setPollUntil(Date.now() + 180_000); // 3 min for slow runs
+        mutate();
+        return;
+      }
+
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(typeof j.error === "string" ? j.error : `HTTP ${res.status}`);
@@ -70,13 +86,18 @@ export default function AIResearchPage() {
         ? j.summaries.filter((s: { pending?: boolean }) => s.pending).map((s: { symbol: string }) => s.symbol)
         : [];
       setPendingSymbols(pending);
-      // Poll the feed every 3s for up to 2 min while pending children finish.
       if (pending.length > 0) {
-        setPollUntil(Date.now() + 120_000);
+        setPollUntil(Date.now() + 180_000); // 3 min
       }
       mutate();
     } catch (err) {
-      setRunError(err instanceof Error ? err.message : String(err));
+      // Network errors aside, assume dispatches were still sent — keep polling.
+      setPendingSymbols(allT1Symbols);
+      setPollUntil(Date.now() + 180_000);
+      setRunError(
+        `Dispatcher timeout (Vercel Hobby 60s cap). Children still running — auto-refreshing as snapshots arrive. (${err instanceof Error ? err.message : String(err)})`,
+      );
+      mutate();
     } finally {
       setRunningAll(false);
     }

@@ -102,7 +102,20 @@ export interface CompanyProfile {
   longName: string | null;
 }
 
+// Company profile rarely changes — cache in-memory for the function instance's
+// lifetime (up to 1 hour). This shaves 1-3s per ticker on warm parent reuse,
+// which matters under tight Vercel function budgets.
+interface CachedProfile {
+  data: CompanyProfile;
+  expiresAt: number;
+}
+const PROFILE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const profileCache = new Map<string, CachedProfile>();
+
 export async function getCompanyProfile(symbol: string): Promise<CompanyProfile> {
+  const cached = profileCache.get(symbol);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
   const blank: CompanyProfile = { symbol, sector: null, industry: null, longName: null };
   try {
     const summary = await yahooFinance.quoteSummary(symbol, {
@@ -110,12 +123,14 @@ export async function getCompanyProfile(symbol: string): Promise<CompanyProfile>
     });
     const profile = summary?.summaryProfile ?? {};
     const quoteType = summary?.quoteType ?? {};
-    return {
+    const data: CompanyProfile = {
       symbol,
       sector: typeof profile.sector === "string" ? profile.sector : null,
       industry: typeof profile.industry === "string" ? profile.industry : null,
       longName: typeof quoteType.longName === "string" ? quoteType.longName : null,
     };
+    profileCache.set(symbol, { data, expiresAt: Date.now() + PROFILE_TTL_MS });
+    return data;
   } catch (err) {
     console.warn("getCompanyProfile error", symbol, err);
     return blank;

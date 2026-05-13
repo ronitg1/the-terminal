@@ -72,11 +72,13 @@ export async function GET(req: NextRequest) {
       }),
   );
 
-  // Cap parent wait at 50s — leave a 10s margin under the platform cap.
-  // Children that don't finish in time keep running on their own 60s budget.
+  // Cap parent wait at 35s — leaves a comfortable margin under the 60s
+  // Vercel cap (cold-start + admin Supabase init + DB lookup eats ~5-10s
+  // before this point). Children that don't finish in time keep running on
+  // their own 60s budget; their thesis snapshots land via direct DB writes.
   await Promise.race([
     Promise.allSettled(dispatched),
-    new Promise<void>((resolve) => setTimeout(resolve, 50_000)),
+    new Promise<void>((resolve) => setTimeout(resolve, 35_000)),
   ]);
 
   const ok = summaries.filter((s) => s.ok).length;
