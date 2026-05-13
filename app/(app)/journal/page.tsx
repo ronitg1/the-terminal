@@ -44,6 +44,8 @@ export default function JournalPage() {
   const [organizing, setOrganizing] = useState(false);
   const [organizeError, setOrganizeError] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Calendar dots
@@ -74,18 +76,31 @@ export default function JournalPage() {
   function scheduleSave(next: { content?: string; tags?: Tag[] }) {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
-      const res = await fetch("/api/journal", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          date: selectedDate,
-          content: next.content ?? content,
-          tags: next.tags ?? tags,
-        }),
-      });
-      if (res.ok) {
-        setSavedAt(new Date().toISOString());
-        mutateDays();
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const res = await fetch("/api/journal", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            date: selectedDate,
+            content: next.content ?? content,
+            tags: next.tags ?? tags,
+          }),
+        });
+        const j = await res.json().catch(() => null);
+        if (res.ok) {
+          setSavedAt(new Date().toISOString());
+          mutateDays();
+        } else {
+          setSaveError(
+            typeof j?.error === "string" ? j.error : `Save failed (HTTP ${res.status})`,
+          );
+        }
+      } catch (err) {
+        setSaveError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSaving(false);
       }
     }, 500);
   }
@@ -130,7 +145,7 @@ export default function JournalPage() {
 
   return (
     <div className="grid h-[calc(100vh-7rem)] grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr_20rem]">
-      {/* Left: calendar + search */}
+      {/* Left: calendar + recent entries + search */}
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
         <ErrorBoundary label="Calendar">
           <JournalCalendar
@@ -139,6 +154,16 @@ export default function JournalPage() {
             days={days}
             selectedDate={selectedDate}
             onSelectDate={(iso) => setSelectedDate(iso)}
+          />
+        </ErrorBoundary>
+        <ErrorBoundary label="Recent entries">
+          <RecentEntries
+            days={days}
+            selectedDate={selectedDate}
+            onPick={(date) => {
+              setSelectedDate(date);
+              setMonthStart(firstOfMonth(new Date(date)));
+            }}
           />
         </ErrorBoundary>
         <ErrorBoundary label="Search">
@@ -162,7 +187,8 @@ export default function JournalPage() {
                 <div className="text-sm font-semibold uppercase tracking-wider">{prettyDate(selectedDate)}</div>
                 <div className="text-[10px] text-muted-foreground">
                   {entry ? `last updated ${timeAgo(entry.updated_at)}` : "new entry"}
-                  {savedAt && <span className="ml-2 text-tier1">saved {timeAgo(savedAt)}</span>}
+                  {saving && <span className="ml-2 text-muted-foreground">saving…</span>}
+                  {savedAt && !saving && <span className="ml-2 text-tier1">saved {timeAgo(savedAt)}</span>}
                 </div>
               </div>
               <Button size="sm" onClick={organize} disabled={organizing || content.trim().length < 20}>
@@ -170,6 +196,11 @@ export default function JournalPage() {
                 {organizing ? "Organizing…" : "AI organize"}
               </Button>
             </div>
+            {saveError && (
+              <div className="border-b border-loss/40 bg-loss/10 px-3 py-2 text-[11px] text-loss">
+                <span className="font-semibold">Couldn&apos;t save:</span> {saveError}
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-1.5 border-b px-3 py-2">
               <Tag className="h-3 w-3 text-muted-foreground" />
               {TAG_OPTIONS.map((t) => (
@@ -225,6 +256,56 @@ export default function JournalPage() {
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+function RecentEntries({
+  days,
+  selectedDate,
+  onPick,
+}: {
+  days: JournalDay[];
+  selectedDate: string;
+  onPick: (date: string) => void;
+}) {
+  // Show the 8 most recent entries that actually have content. Useful for
+  // viewing/jumping when the user can't remember an exact date.
+  const recent = days.filter((d) => d.has_content).slice(0, 8);
+
+  return (
+    <div className="rounded-md border bg-card">
+      <div className="border-b px-2 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        Recent entries
+      </div>
+      {recent.length === 0 ? (
+        <div className="p-3 text-[11px] text-muted-foreground">
+          No saved entries yet. Write one in the center pane — it autosaves 500ms after you stop typing.
+        </div>
+      ) : (
+        <ul className="divide-y">
+          {recent.map((d) => (
+            <li key={d.date}>
+              <button
+                onClick={() => onPick(d.date)}
+                className={cn(
+                  "block w-full px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-accent",
+                  d.date === selectedDate && "bg-tier1/10 text-tier1",
+                )}
+              >
+                <div className="flex items-baseline justify-between gap-1">
+                  <span className="font-mono">{d.date}</span>
+                  {d.tags.length > 0 && (
+                    <span className="truncate text-[9px] uppercase tracking-wider text-muted-foreground">
+                      {d.tags.join(" · ")}
+                    </span>
+                  )}
+                </div>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function SearchPanel({
   value,

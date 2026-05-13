@@ -91,21 +91,87 @@ export async function PATCH(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
   const { date, content, tags } = parsed.data;
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (content !== undefined) patch.content = content;
-  if (tags !== undefined) patch.tags = tags;
+  const nowIso = new Date().toISOString();
 
-  // Upsert by (user_id, date).
-  const { data, error } = await supabase
+  // First, try the fast upsert path (relies on migration 0011's unique
+  // constraint on user_id,date). If that fails because the constraint is
+  // missing, fall back to a manual select-then-insert/update so saves work
+  // regardless of migration state.
+  const upsertRow = {
+    user_id: user.user.id,
+    date,
+    content: content ?? "",
+    tags: tags ?? [],
+    updated_at: nowIso,
+  };
+
+  const upsert = await supabase
     .from("journal_entries")
-    .upsert(
-      { user_id: user.user.id, date, content: content ?? "", tags: tags ?? [], ...patch },
-      { onConflict: "user_id,date" },
-    )
+    .upsert(upsertRow, { onConflict: "user_id,date" })
     .select("*")
     .single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ entry: data });
+
+  if (!upsert.error) {
+    return NextResponse.json({ entry: upsert.data });
+  }
+
+  // Fall back to manual upsert if the constraint is missing or upsert fails.
+  // 1. Look up existing entry for (user, date)
+  const existing = await supabase
+    .from("journal_entries")
+    .select("id")
+    .eq("user_id", user.user.id)
+    .eq("date", date)
+    .maybeSingle();
+
+  if (existing.error) {
+    return NextResponse.json(
+      { error: `Save failed: ${existing.error.message}` },
+      { status: 400 },
+    );
+  }
+
+  if (existing.data) {
+    // 2a. Exists → UPDATE
+    const updatePatch: Record<string, unknown> = { updated_at: nowIso };
+    if (content !== undefined) updatePatch.content = content;
+    if (tags !== undefined) updatePatch.tags = tags;
+    const upd = await supabase
+      .from("journal_entries")
+      .update(updatePatch)
+      .eq("id", existing.data.id)
+      .select("*")
+      .single();
+    if (upd.error) {
+      return NextResponse.json({ error: `Save failed: ${upd.error.message}` }, { status: 400 });
+    }
+    return NextResponse.json({ entry: upd.data });
+  }
+
+  // 2b. Doesn't exist → INSERT
+  const ins = await supabase
+    .from("journal_entries")
+    .insert(upsertRow)
+    .select("*")
+    .single();
+  if (ins.error) {
+    // Most likely cause: migration 0011's updated_at column doesn't exist yet.
+    // Retry without updated_at as a last resort.
+    const retryRow = { user_id: user.user.id, date, content: content ?? "", tags: tags ?? [] };
+    const retry = await supabase
+      .from("journal_entries")
+      .insert(retryRow)
+      .select("*")
+      .single();
+    if (retry.error) {
+      return NextResponse.json(
+        { error: `Save failed: ${retry.error.message}. If this persists, apply supabase/migrations/0011_journal_extensions.sql.` },
+        { status: 400 },
+      );
+    }
+    return NextResponse.json({ entry: retry.data });
+  }
+  return NextResponse.json({ entry: ins.data });
 }
 
 export async function DELETE(req: NextRequest) {
