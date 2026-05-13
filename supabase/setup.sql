@@ -25,7 +25,7 @@ create extension if not exists "pgcrypto";
 -- ============================================================================
 -- tickers
 -- ============================================================================
-create table public.tickers (
+create table if not exists public.tickers (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -35,12 +35,12 @@ create table public.tickers (
   created_at timestamptz not null default now(),
   unique (user_id, symbol)
 );
-create index tickers_user_tier_idx on public.tickers (user_id, tier, symbol);
+create index if not exists tickers_user_tier_idx on public.tickers (user_id, tier, symbol);
 
 -- ============================================================================
 -- journal_entries
 -- ============================================================================
-create table public.journal_entries (
+create table if not exists public.journal_entries (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   date date not null,
@@ -48,12 +48,12 @@ create table public.journal_entries (
   tags text[] not null default '{}',
   created_at timestamptz not null default now()
 );
-create index journal_user_date_idx on public.journal_entries (user_id, date desc);
+create index if not exists journal_user_date_idx on public.journal_entries (user_id, date desc);
 
 -- ============================================================================
 -- thesis_snapshots
 -- ============================================================================
-create table public.thesis_snapshots (
+create table if not exists public.thesis_snapshots (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -63,12 +63,12 @@ create table public.thesis_snapshots (
   conviction smallint check (conviction between 1 and 10),
   generated_at timestamptz not null default now()
 );
-create index thesis_user_symbol_idx on public.thesis_snapshots (user_id, symbol, generated_at desc);
+create index if not exists thesis_user_symbol_idx on public.thesis_snapshots (user_id, symbol, generated_at desc);
 
 -- ============================================================================
 -- watchlist_alerts
 -- ============================================================================
-create table public.watchlist_alerts (
+create table if not exists public.watchlist_alerts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -76,12 +76,12 @@ create table public.watchlist_alerts (
   triggered_at timestamptz,
   created_at timestamptz not null default now()
 );
-create index alerts_user_symbol_idx on public.watchlist_alerts (user_id, symbol);
+create index if not exists alerts_user_symbol_idx on public.watchlist_alerts (user_id, symbol);
 
 -- ============================================================================
 -- earnings_events
 -- ============================================================================
-create table public.earnings_events (
+create table if not exists public.earnings_events (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -97,13 +97,13 @@ create table public.earnings_events (
   debrief_data jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
-create index earnings_user_date_idx on public.earnings_events (user_id, report_date desc);
-create index earnings_user_symbol_idx on public.earnings_events (user_id, symbol, report_date desc);
+create index if not exists earnings_user_date_idx on public.earnings_events (user_id, report_date desc);
+create index if not exists earnings_user_symbol_idx on public.earnings_events (user_id, symbol, report_date desc);
 
 -- ============================================================================
 -- trades
 -- ============================================================================
-create table public.trades (
+create table if not exists public.trades (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -117,12 +117,12 @@ create table public.trades (
   notes text default '',
   created_at timestamptz not null default now()
 );
-create index trades_user_symbol_idx on public.trades (user_id, symbol, entry_date desc);
+create index if not exists trades_user_symbol_idx on public.trades (user_id, symbol, entry_date desc);
 
 -- ============================================================================
 -- short_interest
 -- ============================================================================
-create table public.short_interest (
+create table if not exists public.short_interest (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -130,12 +130,12 @@ create table public.short_interest (
   days_to_cover numeric,
   fetched_at timestamptz not null default now()
 );
-create index si_user_symbol_idx on public.short_interest (user_id, symbol, fetched_at desc);
+create index if not exists si_user_symbol_idx on public.short_interest (user_id, symbol, fetched_at desc);
 
 -- ============================================================================
 -- options_flow
 -- ============================================================================
-create table public.options_flow (
+create table if not exists public.options_flow (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -148,12 +148,12 @@ create table public.options_flow (
   flagged_unusual boolean not null default false,
   fetched_at timestamptz not null default now()
 );
-create index flow_user_symbol_idx on public.options_flow (user_id, symbol, fetched_at desc);
+create index if not exists flow_user_symbol_idx on public.options_flow (user_id, symbol, fetched_at desc);
 
 -- ============================================================================
 -- estimate_revisions
 -- ============================================================================
-create table public.estimate_revisions (
+create table if not exists public.estimate_revisions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -163,12 +163,12 @@ create table public.estimate_revisions (
   analyst_count integer,
   fetched_at timestamptz not null default now()
 );
-create index revisions_user_symbol_idx on public.estimate_revisions (user_id, symbol, fetched_at desc);
+create index if not exists revisions_user_symbol_idx on public.estimate_revisions (user_id, symbol, fetched_at desc);
 
 -- ============================================================================
 -- etf_flows
 -- ============================================================================
-create table public.etf_flows (
+create table if not exists public.etf_flows (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -176,12 +176,12 @@ create table public.etf_flows (
   aum numeric,
   fetched_at timestamptz not null default now()
 );
-create index etf_flows_user_symbol_idx on public.etf_flows (user_id, symbol, fetched_at desc);
+create index if not exists etf_flows_user_symbol_idx on public.etf_flows (user_id, symbol, fetched_at desc);
 
 -- ============================================================================
 -- transcript_analyses
 -- ============================================================================
-create table public.transcript_analyses (
+create table if not exists public.transcript_analyses (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   earnings_event_id uuid references public.earnings_events(id) on delete cascade,
@@ -193,12 +193,12 @@ create table public.transcript_analyses (
   guidance_language text,
   generated_at timestamptz not null default now()
 );
-create index transcripts_user_event_idx on public.transcript_analyses (user_id, earnings_event_id);
+create index if not exists transcripts_user_event_idx on public.transcript_analyses (user_id, earnings_event_id);
 
 -- ============================================================================
 -- peer_readthroughs
 -- ============================================================================
-create table public.peer_readthroughs (
+create table if not exists public.peer_readthroughs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   reporting_symbol text not null,
@@ -207,12 +207,12 @@ create table public.peer_readthroughs (
   sentiment text check (sentiment in ('positive','negative','neutral')),
   generated_at timestamptz not null default now()
 );
-create index readthroughs_user_idx on public.peer_readthroughs (user_id, generated_at desc);
+create index if not exists readthroughs_user_idx on public.peer_readthroughs (user_id, generated_at desc);
 
 -- ============================================================================
 -- scrape_errors — observability for graceful-fallback requirement
 -- ============================================================================
-create table public.scrape_errors (
+create table if not exists public.scrape_errors (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete cascade,
   source text not null,
@@ -221,7 +221,7 @@ create table public.scrape_errors (
   attempt integer,
   occurred_at timestamptz not null default now()
 );
-create index scrape_errors_source_idx on public.scrape_errors (source, occurred_at desc);
+create index if not exists scrape_errors_source_idx on public.scrape_errors (source, occurred_at desc);
 
 -- ============================================================================
 -- RLS
@@ -240,6 +240,7 @@ alter table public.transcript_analyses  enable row level security;
 alter table public.peer_readthroughs    enable row level security;
 alter table public.scrape_errors        enable row level security;
 
+-- Idempotent: drop-then-create so re-running the script is safe.
 do $$
 declare
   t text;
@@ -250,10 +251,14 @@ declare
   ];
 begin
   foreach t in array tbls loop
-    execute format('create policy %I_select on public.%I for select using (auth.uid() = user_id)', t || '_sel', t);
-    execute format('create policy %I_insert on public.%I for insert with check (auth.uid() = user_id)', t || '_ins', t);
-    execute format('create policy %I_update on public.%I for update using (auth.uid() = user_id) with check (auth.uid() = user_id)', t || '_upd', t);
-    execute format('create policy %I_delete on public.%I for delete using (auth.uid() = user_id)', t || '_del', t);
+    execute format('drop policy if exists %I on public.%I', t || '_sel', t);
+    execute format('create policy %I on public.%I for select using (auth.uid() = user_id)', t || '_sel', t);
+    execute format('drop policy if exists %I on public.%I', t || '_ins', t);
+    execute format('create policy %I on public.%I for insert with check (auth.uid() = user_id)', t || '_ins', t);
+    execute format('drop policy if exists %I on public.%I', t || '_upd', t);
+    execute format('create policy %I on public.%I for update using (auth.uid() = user_id) with check (auth.uid() = user_id)', t || '_upd', t);
+    execute format('drop policy if exists %I on public.%I', t || '_del', t);
+    execute format('create policy %I on public.%I for delete using (auth.uid() = user_id)', t || '_del', t);
   end loop;
 end $$;
 
@@ -263,7 +268,7 @@ end $$;
 -- ============================================================================
 -- Phase 2a — per-call Claude API usage log used to enforce the monthly budget cap.
 
-create table public.claude_usage (
+create table if not exists public.claude_usage (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references auth.users(id) on delete cascade,
   model text not null,
@@ -276,12 +281,13 @@ create table public.claude_usage (
   occurred_at timestamptz not null default now()
 );
 
-create index claude_usage_month_idx on public.claude_usage (occurred_at desc);
-create index claude_usage_user_month_idx on public.claude_usage (user_id, occurred_at desc);
+create index if not exists claude_usage_month_idx on public.claude_usage (occurred_at desc);
+create index if not exists claude_usage_user_month_idx on public.claude_usage (user_id, occurred_at desc);
 
 alter table public.claude_usage enable row level security;
 
 -- Users can read their own usage (for the UI indicator).
+drop policy if exists claude_usage_sel on public.claude_usage;
 create policy claude_usage_sel on public.claude_usage
   for select using (auth.uid() = user_id);
 
@@ -294,7 +300,7 @@ create policy claude_usage_sel on public.claude_usage
 -- ============================================================================
 -- Phase 2a — persisted AI-generated trade ideas so the user can review history.
 
-create table public.trade_ideas (
+create table if not exists public.trade_ideas (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   symbol text not null,
@@ -309,14 +315,17 @@ create table public.trade_ideas (
   generated_at timestamptz not null default now()
 );
 
-create index trade_ideas_user_date_idx on public.trade_ideas (user_id, generated_at desc);
+create index if not exists trade_ideas_user_date_idx on public.trade_ideas (user_id, generated_at desc);
 
 alter table public.trade_ideas enable row level security;
 
+drop policy if exists trade_ideas_sel on public.trade_ideas;
 create policy trade_ideas_sel on public.trade_ideas
   for select using (auth.uid() = user_id);
+drop policy if exists trade_ideas_ins on public.trade_ideas;
 create policy trade_ideas_ins on public.trade_ideas
   for insert with check (auth.uid() = user_id);
+drop policy if exists trade_ideas_del on public.trade_ideas;
 create policy trade_ideas_del on public.trade_ideas
   for delete using (auth.uid() = user_id);
 
@@ -403,7 +412,7 @@ create index if not exists transcript_user_symbol_idx
 -- notification preferences. Stored as a single jsonb blob keyed by user_id so
 -- we can extend without schema churn.
 
-create table public.user_settings (
+create table if not exists public.user_settings (
   user_id uuid primary key references auth.users(id) on delete cascade,
   data jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
@@ -453,10 +462,16 @@ alter table public.journal_entries
   add column if not exists updated_at timestamptz not null default now();
 
 -- Enforce one row per (user_id, date) so client can PUT/upsert by natural key.
--- If duplicates already exist, this will fail — but the table is empty at this
--- point in the build, so it's safe.
-alter table public.journal_entries
-  add constraint journal_entries_user_date_unique unique (user_id, date);
+-- Wrapped in a DO block with exception so re-running this setup file is safe
+-- even if the constraint already exists.
+do $$
+begin
+  alter table public.journal_entries
+    add constraint journal_entries_user_date_unique unique (user_id, date);
+exception
+  when duplicate_object then null;
+  when duplicate_table then null;
+end $$;
 
 
 -- ============================================================================
