@@ -7,3 +7,12 @@ node_modules/
 .DS_Store
 next-env.d.ts
 .vercel
+tsconfig.tsbuildinfo
+.claude/worktrees/
+
+# Local editor / OS noise
+.idea/
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
+Thumbs.db
