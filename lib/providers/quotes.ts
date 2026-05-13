@@ -94,3 +94,30 @@ export function getQuotesProvider(): QuotesProvider {
   if (!provider) provider = new YahooQuotesProvider();
   return provider;
 }
+
+export interface CompanyProfile {
+  symbol: string;
+  sector: string | null;
+  industry: string | null;
+  longName: string | null;
+}
+
+export async function getCompanyProfile(symbol: string): Promise<CompanyProfile> {
+  const blank: CompanyProfile = { symbol, sector: null, industry: null, longName: null };
+  try {
+    const summary = await yahooFinance.quoteSummary(symbol, {
+      modules: ["summaryProfile", "quoteType"],
+    });
+    const profile = summary?.summaryProfile ?? {};
+    const quoteType = summary?.quoteType ?? {};
+    return {
+      symbol,
+      sector: typeof profile.sector === "string" ? profile.sector : null,
+      industry: typeof profile.industry === "string" ? profile.industry : null,
+      longName: typeof quoteType.longName === "string" ? quoteType.longName : null,
+    };
+  } catch (err) {
+    console.warn("getCompanyProfile error", symbol, err);
+    return blank;
+  }
+}

@@ -21,11 +21,20 @@ import { ThesisStatusBadge } from "./ThesisStatusBadge";
 import { cn, formatPct, formatPrice, timeAgo } from "@/lib/utils";
 import type { Ticker, ThesisSnapshot, EstimateRevisionRow, TickerTier } from "@/lib/types/db";
 
+interface TranscriptSummary {
+  id: string;
+  sentiment_score: number | null;
+  tone_delta: string | null;
+  data: { thesisImpact?: { direction?: string; narrative?: string } } | null;
+  generated_at: string;
+}
+
 interface DetailResponse {
   ticker: Ticker;
   latestThesis: ThesisSnapshot | null;
   shortInterestHistory: { si_pct: number | null; fetched_at: string }[];
   estimateRevisions: EstimateRevisionRow[];
+  transcripts: TranscriptSummary[];
   priceHistory: { date: string; close: number }[];
 }
 
@@ -104,6 +113,31 @@ export function TickerDetailDrawer({
 
         {t && (
           <div className="mt-4 space-y-5">
+            {(t.sector || t.industry || t.frame_id || t.benchmark_symbol) && (
+              <section className="flex flex-wrap gap-1.5">
+                {t.sector && (
+                  <span className="rounded-sm border bg-secondary/40 px-1.5 py-0.5 text-[10px]">
+                    <span className="text-muted-foreground">Sector:</span> <span className="font-medium">{t.sector}</span>
+                  </span>
+                )}
+                {t.industry && (
+                  <span className="rounded-sm border bg-secondary/40 px-1.5 py-0.5 text-[10px]">
+                    <span className="text-muted-foreground">Industry:</span> <span className="font-medium">{t.industry}</span>
+                  </span>
+                )}
+                {t.frame_id && (
+                  <span className="rounded-sm border border-tier1/40 bg-tier1/10 px-1.5 py-0.5 text-[10px] text-tier1">
+                    <span className="opacity-70">Frame:</span> <span className="font-medium">{t.frame_id}</span>
+                  </span>
+                )}
+                {t.benchmark_symbol && (
+                  <span className="rounded-sm border bg-secondary/40 px-1.5 py-0.5 font-mono text-[10px]">
+                    <span className="text-muted-foreground">Bench:</span> <span className="font-medium">{t.benchmark_symbol}</span>
+                  </span>
+                )}
+              </section>
+            )}
+
             <section>
               <SectionTitle>Price · 1Y</SectionTitle>
               <div className="h-44 w-full">
@@ -214,6 +248,53 @@ export function TickerDetailDrawer({
                 </div>
               ) : (
                 <div className="text-xs text-muted-foreground">No revision history yet</div>
+              )}
+            </section>
+
+            <Separator />
+
+            <section className="space-y-2">
+              <SectionTitle>Transcripts</SectionTitle>
+              {(data!.transcripts ?? []).length > 0 ? (
+                <ul className="space-y-1.5 text-xs">
+                  {data!.transcripts.map((tr) => {
+                    const score = tr.sentiment_score ?? 0;
+                    const dir = tr.data?.thesisImpact?.direction;
+                    const scoreColor = score > 2 ? "text-gain" : score < -2 ? "text-loss" : "text-amber-500";
+                    return (
+                      <li key={tr.id} className="rounded-md border bg-card p-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono">{tr.generated_at.slice(0, 10)}</span>
+                          <span className={cn("font-mono tabular-nums", scoreColor)}>
+                            {score >= 0 ? "+" : ""}
+                            {score}
+                          </span>
+                          {dir && (
+                            <span
+                              className={cn(
+                                "rounded-sm border px-1 text-[9px] uppercase tracking-wider",
+                                dir === "strengthens" && "border-tier1/40 text-tier1",
+                                dir === "confirms" && "border-gain/40 text-gain",
+                                dir === "weakens" && "border-amber-500/40 text-amber-500",
+                                dir === "breaks" && "border-loss/40 text-loss",
+                              )}
+                            >
+                              {dir}
+                            </span>
+                          )}
+                          <span className="ml-auto text-[10px] text-muted-foreground">{timeAgo(tr.generated_at)}</span>
+                        </div>
+                        {tr.tone_delta && (
+                          <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{tr.tone_delta}</p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                  No transcript analyses yet. Paste an earnings call on the <span className="font-medium">Transcripts</span> tab to add one.
+                </div>
               )}
             </section>
 

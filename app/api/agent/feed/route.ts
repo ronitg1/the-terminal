@@ -28,11 +28,33 @@ export interface ThesisStructuredOut {
   positionRisks: string[];
 }
 
+export interface AnalystOut {
+  perspective: "news" | "technicals" | "fundamentals";
+  signalQuality: "bullish" | "bearish" | "mixed" | "noise";
+  summary: string;
+  bullets: string[];
+}
+
+export interface ResearcherOut {
+  stance: "bull" | "bear";
+  thesis: string;
+  targetPrice: number | null;
+  mustBeTrue: string[];
+  confidence: number;
+}
+
+export interface MultiAgentOut {
+  analysts?: AnalystOut[];
+  bull?: ResearcherOut;
+  bear?: ResearcherOut;
+}
+
 export interface ThesisDataOut {
   keyDevelopment?: string;
   watch?: string[];
   riskFlags?: string[];
   structured?: ThesisStructuredOut;
+  multiAgent?: MultiAgentOut;
 }
 
 export interface FeedThesisCard {

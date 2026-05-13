@@ -15,6 +15,45 @@ export interface TavilySearchResponse {
   results: TavilyResult[];
 }
 
+export interface TavilyExtractResult {
+  url: string;
+  rawContent: string;
+}
+
+export async function tavilyExtract(
+  url: string,
+  opts?: { depth?: "basic" | "advanced" },
+): Promise<TavilyExtractResult> {
+  const key = process.env.TAVILY_API_KEY?.trim();
+  if (!key) {
+    throw new Error("TAVILY_API_KEY is not set in .env.local");
+  }
+  const res = await fetch("https://api.tavily.com/extract", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      urls: [url],
+      include_images: false,
+      extract_depth: opts?.depth ?? "advanced",
+    }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Tavily extract ${res.status}: ${body.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as {
+    results?: Array<{ url: string; raw_content: string }>;
+    failed_results?: Array<{ url: string; error: string }>;
+  };
+  const first = json.results?.[0];
+  if (!first) {
+    const failure = json.failed_results?.[0];
+    throw new Error(`Tavily failed to extract: ${failure?.error ?? "no content returned"}`);
+  }
+  return { url: first.url, rawContent: first.raw_content };
+}
+
 export async function tavilySearch(query: string, opts?: { maxResults?: number; topic?: "general" | "news" }): Promise<TavilySearchResponse> {
   const key = process.env.TAVILY_API_KEY?.trim();
   if (!key) {

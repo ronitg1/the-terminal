@@ -1,15 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { llmComplete } from "@/lib/llm";
 import { ensureBudget, recordUsage } from "@/lib/billing";
-import { THESIS_SYSTEM_PROMPT, buildThesisUserPrompt } from "@/lib/agent/thesisPrompt";
-import { getQuotesProvider } from "@/lib/providers/quotes";
+import { getQuotesProvider, getCompanyProfile } from "@/lib/providers/quotes";
 import { getOptionsProvider } from "@/lib/providers/options";
 import { getShortInterestProvider } from "@/lib/providers/short-interest";
 import { getEstimateRevisionsProvider } from "@/lib/providers/estimate-revisions";
 import { getNewsProvider } from "@/lib/providers/news";
 import type { ThesisAgentOutput, AgentRunSummary, ThesisCatalyst, ThesisCase, ThesisStructured } from "@/lib/types/agent";
 import type { ThesisStatus } from "@/lib/types/db";
-import { parseLenientJson } from "@/lib/agent/jsonRepair";
+import { runMultiAgentThesis, type MultiAgentResult, type PipelineContext } from "@/lib/agent/multiAgent";
+import { FRAMES, getFrameById, pickFrame, type IndustryFrame } from "@/lib/agent/industryFrames";
 
 interface RunInput {
   symbol: string;
@@ -22,14 +21,49 @@ export async function runThesisForSymbol(input: RunInput): Promise<AgentRunSumma
   const started = Date.now();
   const { symbol, companyName, userId, supabase } = input;
 
-  // 1. Gather context in parallel.
-  const [quotes, optionMove, si, rev, news, iclnHistory, symbolHistory, prevThesis] = await Promise.all([
+  // 1a. Resolve the industry frame for this ticker. If the row has sector/
+  //     industry stored, use it; otherwise lazy-backfill via Yahoo so future
+  //     runs (and the agent prompts here) get the right frame.
+  const { data: tickerRow } = await supabase
+    .from("tickers")
+    .select("id,sector,industry,frame_id,benchmark_symbol")
+    .eq("user_id", userId)
+    .eq("symbol", symbol)
+    .maybeSingle();
+  let sector: string | null = (tickerRow as { sector: string | null } | null)?.sector ?? null;
+  let industry: string | null = (tickerRow as { industry: string | null } | null)?.industry ?? null;
+  let pinnedFrameId: string | null = (tickerRow as { frame_id: string | null } | null)?.frame_id ?? null;
+  let pinnedBenchmark: string | null = (tickerRow as { benchmark_symbol: string | null } | null)?.benchmark_symbol ?? null;
+
+  if (!sector && !industry && tickerRow) {
+    try {
+      const profile = await getCompanyProfile(symbol);
+      sector = profile.sector;
+      industry = profile.industry;
+      const f = pickFrame(sector, industry);
+      pinnedFrameId = pinnedFrameId ?? f.id;
+      pinnedBenchmark = pinnedBenchmark ?? f.benchmarkSymbol;
+      // Backfill so we don't re-query Yahoo next time.
+      await supabase
+        .from("tickers")
+        .update({ sector, industry, frame_id: pinnedFrameId, benchmark_symbol: pinnedBenchmark })
+        .eq("id", (tickerRow as { id: string }).id);
+    } catch (err) {
+      console.warn("lazy industry backfill failed", symbol, err);
+    }
+  }
+
+  const frame: IndustryFrame = getFrameById(pinnedFrameId) ?? pickFrame(sector, industry);
+  const benchmarkSymbol = pinnedBenchmark ?? frame.benchmarkSymbol;
+
+  // 1b. Gather data in parallel — use the frame's benchmark for relative return.
+  const [quotes, optionMove, si, rev, news, benchHistory, symbolHistory, prevThesis] = await Promise.all([
     getQuotesProvider().batchQuotes([symbol]),
     getOptionsProvider().impliedMove(symbol),
     getShortInterestProvider().fetch(symbol),
     getEstimateRevisionsProvider().fetch(symbol),
     getNewsProvider().forSymbol(symbol),
-    getQuotesProvider().history("ICLN", "1mo"),
+    getQuotesProvider().history(benchmarkSymbol, "1mo"),
     getQuotesProvider().history(symbol, "1mo"),
     supabase
       .from("thesis_snapshots")
@@ -42,10 +76,10 @@ export async function runThesisForSymbol(input: RunInput): Promise<AgentRunSumma
   ]);
 
   const q = quotes[0] ?? null;
-  const relICLN = relativeReturn(symbolHistory, iclnHistory);
+  const relBench = relativeReturn(symbolHistory, benchHistory);
   const previousStatus = (prevThesis.data?.status ?? null) as ThesisStatus | null;
 
-  const userPrompt = buildThesisUserPrompt({
+  const ctxForPipeline: PipelineContext = {
     symbol,
     companyName,
     existingThesis: prevThesis.data?.content ?? null,
@@ -53,37 +87,40 @@ export async function runThesisForSymbol(input: RunInput): Promise<AgentRunSumma
     news,
     price: q?.price ?? null,
     changePct: q?.changePct ?? null,
-    relativeToICLN: relICLN,
+    relativeToBenchmark: relBench,
     impliedMovePct: optionMove.impliedMovePct,
     siPct: si.siPct,
     daysToCover: si.daysToCover,
     revisionDirection: rev.direction,
     asOfIso: new Date().toISOString(),
-  });
+    frame,
+  };
 
-  // 2. Budget check, then call the active LLM provider.
+  // 2. Budget check, then run the multi-agent pipeline (3 analysts → bull → bear → PM synthesizer).
   await ensureBudget(supabase, userId);
-  const completion = await llmComplete({
-    purpose: "thesis",
-    system: THESIS_SYSTEM_PROMPT,
-    user: userPrompt,
-    maxTokens: 4096,
-    jsonResponse: true,
-  });
+  const pipeline: MultiAgentResult = await runMultiAgentThesis(ctxForPipeline);
 
+  // We don't get per-call usage from the pipeline today; record an approximate
+  // aggregate so the budget tracker reflects the spend. Each pipeline run is
+  // ~6 small DeepSeek calls @ ~1500 in / 800 out each.
   await recordUsage(
     {
       userId,
-      model: completion.model,
-      endpoint: "agent.thesis",
-      usage: completion.usage,
+      model: "deepseek-v4-pro",
+      endpoint: "agent.thesis.multi",
+      usage: {
+        input_tokens: 6 * 1500,
+        output_tokens: 6 * 800,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      },
     },
     supabase,
   );
 
-  const output = parseThesisOutput(completion.text, news, symbol);
+  const output = parseSynthesizedOutput(pipeline.synthesized, news, symbol);
 
-  // 3. Save snapshot — structured fields go into the new `data` jsonb column.
+  // 3. Save snapshot — structured fields + the multi-agent debate go into `data`.
   const { error: insertErr } = await supabase.from("thesis_snapshots").insert({
     user_id: userId,
     symbol,
@@ -94,6 +131,12 @@ export async function runThesisForSymbol(input: RunInput): Promise<AgentRunSumma
       watch: output.watch,
       riskFlags: output.riskFlags,
       structured: output.structured,
+      // Debate / specialist views — rendered in the drawer for transparency.
+      multiAgent: {
+        analysts: pipeline.analysts,
+        bull: pipeline.bull,
+        bear: pipeline.bear,
+      },
     },
     status: output.status,
     conviction: output.conviction,
@@ -111,15 +154,7 @@ export async function runThesisForSymbol(input: RunInput): Promise<AgentRunSumma
   };
 }
 
-function parseThesisOutput(raw: string, news: { title: string; url: string; publishedAt: string }[], symbol?: string): ThesisAgentOutput {
-  let parsed: any;
-  try {
-    parsed = parseLenientJson(raw);
-  } catch (err) {
-    console.error(`[thesis ${symbol ?? "?"}] lenient JSON parse failed. Raw tail:`, raw.slice(-600));
-    throw err instanceof Error ? err : new Error(String(err));
-  }
-
+function parseSynthesizedOutput(parsed: Record<string, unknown>, news: { title: string; url: string; publishedAt: string }[], _symbol?: string): ThesisAgentOutput {
   const status = normalizeStatus(parsed.status);
   const conviction = clampInt(parsed.conviction, 1, 10);
   const watch = strArray(parsed.watch, 8);

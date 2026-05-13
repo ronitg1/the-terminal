@@ -32,10 +32,42 @@ export interface ContractsForExpiry {
   putsNearAtm: ContractQuote[];
 }
 
+export interface ContractActivity {
+  type: "call" | "put";
+  strike: number;
+  expiry: string;
+  daysToExpiry: number;
+  volume: number;
+  openInterest: number;
+  volOiRatio: number;       // volume / max(openInterest,1)
+  mid: number | null;
+  impliedVolatility: number | null;
+  notionalUsd: number | null; // mid * volume * 100
+}
+
+export interface ChainSummary {
+  symbol: string;
+  spot: number | null;
+  expiry: string | null;       // expiry used for the front-of-book aggregate
+  daysToExpiry: number | null;
+  callVolume: number;
+  putVolume: number;
+  callOpenInterest: number;
+  putOpenInterest: number;
+  callNotionalUsd: number;     // estimated $ premium traded today on calls (front expiry)
+  putNotionalUsd: number;
+  callPutVolumeRatio: number | null;    // null if put vol is 0
+  callPutOiRatio: number | null;
+  atmIv: number | null;        // mid of ATM call & put IV — front expiry
+  notableContracts: ContractActivity[]; // top 5 by volume/OI with volume threshold
+  asOf: string;                // ISO timestamp when computed
+}
+
 export interface OptionsProvider {
   impliedMove(symbol: string): Promise<ImpliedMove>;
   expiries(symbol: string): Promise<string[]>;
   contractsForExpiry(symbol: string, expiryDateIso?: string): Promise<ContractsForExpiry | null>;
+  chainSummary(symbol: string, expiryDateIso?: string): Promise<ChainSummary | null>;
 }
 
 class YahooOptionsProvider implements OptionsProvider {
@@ -100,6 +132,100 @@ class YahooOptionsProvider implements OptionsProvider {
       };
     } catch (err) {
       console.error("YahooOptionsProvider.contractsForExpiry error", symbol, err);
+      return null;
+    }
+  }
+
+  async chainSummary(symbol: string, expiryDateIso?: string): Promise<ChainSummary | null> {
+    try {
+      const queryOpts = expiryDateIso ? { date: new Date(expiryDateIso) } : {};
+      const opts = await yahooFinance.options(symbol, queryOpts);
+      const spot = (opts as any).quote?.regularMarketPrice ?? null;
+      if (!opts.options || opts.options.length === 0) return null;
+      const chain = opts.options[0];
+      const expiry =
+        chain.expirationDate instanceof Date
+          ? chain.expirationDate.toISOString().slice(0, 10)
+          : String(chain.expirationDate);
+      const daysToExpiry = Math.max(0, Math.round((new Date(expiry).getTime() - Date.now()) / 86400000));
+
+      const calls = (chain.calls ?? []) as any[];
+      const puts = (chain.puts ?? []) as any[];
+
+      const sumVol = (arr: any[]) => arr.reduce((s, c) => s + (typeof c.volume === "number" ? c.volume : 0), 0);
+      const sumOi = (arr: any[]) => arr.reduce((s, c) => s + (typeof c.openInterest === "number" ? c.openInterest : 0), 0);
+      const sumNotional = (arr: any[]) =>
+        arr.reduce((s, c) => {
+          const m = midPrice(c);
+          const v = typeof c.volume === "number" ? c.volume : 0;
+          if (m == null || v === 0) return s;
+          return s + m * v * 100;
+        }, 0);
+
+      const callVolume = sumVol(calls);
+      const putVolume = sumVol(puts);
+      const callOpenInterest = sumOi(calls);
+      const putOpenInterest = sumOi(puts);
+      const callNotionalUsd = sumNotional(calls);
+      const putNotionalUsd = sumNotional(puts);
+
+      let atmIv: number | null = null;
+      if (spot && calls.length && puts.length) {
+        const closest = (rows: any[]) =>
+          rows.reduce((best, c) =>
+            Math.abs((c.strike ?? Infinity) - spot) < Math.abs((best.strike ?? Infinity) - spot) ? c : best,
+          );
+        const aCall = closest(calls);
+        const aPut = closest(puts);
+        const cIv = typeof aCall.impliedVolatility === "number" ? aCall.impliedVolatility : null;
+        const pIv = typeof aPut.impliedVolatility === "number" ? aPut.impliedVolatility : null;
+        atmIv = cIv != null && pIv != null ? (cIv + pIv) / 2 : cIv ?? pIv ?? null;
+      }
+
+      const toActivity = (rows: any[], type: "call" | "put"): ContractActivity[] =>
+        rows
+          .filter((c) => typeof c.volume === "number" && c.volume >= 50)
+          .map((c) => {
+            const vol = c.volume as number;
+            const oi = typeof c.openInterest === "number" ? c.openInterest : 0;
+            const m = midPrice(c);
+            return {
+              type,
+              strike: c.strike as number,
+              expiry,
+              daysToExpiry,
+              volume: vol,
+              openInterest: oi,
+              volOiRatio: vol / Math.max(oi, 1),
+              mid: m,
+              impliedVolatility: typeof c.impliedVolatility === "number" ? c.impliedVolatility : null,
+              notionalUsd: m != null ? m * vol * 100 : null,
+            };
+          });
+
+      const notableContracts = [...toActivity(calls, "call"), ...toActivity(puts, "put")]
+        .sort((a, b) => b.volOiRatio - a.volOiRatio)
+        .slice(0, 5);
+
+      return {
+        symbol,
+        spot,
+        expiry,
+        daysToExpiry,
+        callVolume,
+        putVolume,
+        callOpenInterest,
+        putOpenInterest,
+        callNotionalUsd,
+        putNotionalUsd,
+        callPutVolumeRatio: putVolume > 0 ? callVolume / putVolume : null,
+        callPutOiRatio: putOpenInterest > 0 ? callOpenInterest / putOpenInterest : null,
+        atmIv,
+        notableContracts,
+        asOf: new Date().toISOString(),
+      };
+    } catch (err) {
+      console.error("YahooOptionsProvider.chainSummary error", symbol, err);
       return null;
     }
   }

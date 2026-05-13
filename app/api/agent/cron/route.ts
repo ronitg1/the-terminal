@@ -3,6 +3,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/supabase/admin";
 import { runThesisForSymbol } from "@/lib/agent/run";
+import { sendPushToUser } from "@/lib/push";
+import { getUserSettings } from "@/lib/settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,22 +26,52 @@ export async function GET(req: NextRequest) {
 
   const tickers = (data ?? []) as Array<{ user_id: string; symbol: string; name: string | null; tier: number }>;
 
+  // Cache per-user settings so we only fetch once per user.
+  const settingsCache = new Map<string, Awaited<ReturnType<typeof getUserSettings>>>();
+
   let ok = 0;
   let failed = 0;
+  let pushed = 0;
   for (const t of tickers) {
     try {
-      await runThesisForSymbol({
+      const summary = await runThesisForSymbol({
         symbol: t.symbol,
         companyName: t.name,
         userId: t.user_id,
         supabase: admin,
       });
       ok++;
+
+      // Trigger push when a thesis tips from intact/strengthened → weakened/broken.
+      if (
+        summary.statusChanged &&
+        (summary.output.status === "weakened" || summary.output.status === "broken")
+      ) {
+        let settings = settingsCache.get(t.user_id);
+        if (!settings) {
+          settings = await getUserSettings(admin, t.user_id);
+          settingsCache.set(t.user_id, settings);
+        }
+        if (settings.notifications.thesisStatusChanges) {
+          const res = await sendPushToUser(
+            t.user_id,
+            {
+              title: `${t.symbol} thesis ${summary.output.status}`,
+              body: summary.output.keyDevelopment || `Status moved ${summary.previousStatus ?? "?"} → ${summary.output.status}`,
+              url: `/ai-research?symbol=${encodeURIComponent(t.symbol)}`,
+              tag: `thesis-status-${t.symbol}`,
+              requireInteraction: summary.output.status === "broken",
+            },
+            admin,
+          );
+          if (res.sent > 0) pushed++;
+        }
+      }
     } catch (err) {
       console.error("cron run failed", t.symbol, err);
       failed++;
     }
   }
 
-  return NextResponse.json({ ok, failed, total: tickers.length });
+  return NextResponse.json({ ok, failed, pushed, total: tickers.length });
 }

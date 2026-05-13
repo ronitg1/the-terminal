@@ -34,12 +34,12 @@ export default async function BookPage() {
       </ErrorBoundary>
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div>
           <ErrorBoundary label="Correlation heatmap">
             <CorrelationHeatmap />
           </ErrorBoundary>
         </div>
-        <div>
+        <div className="lg:col-span-2">
           <ErrorBoundary label="ETF flows">
             <EtfFlowPanel />
           </ErrorBoundary>

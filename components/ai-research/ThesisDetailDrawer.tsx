@@ -7,7 +7,7 @@ import { ThesisStatusBadge } from "@/components/book/ThesisStatusBadge";
 import { Separator } from "@/components/ui/separator";
 import { ConvictionDial } from "./ConvictionDial";
 import { timeAgo, cn } from "@/lib/utils";
-import type { FeedThesisCard, ThesisCatalystOut } from "@/app/api/agent/feed/route";
+import type { FeedThesisCard, ThesisCatalystOut, AnalystOut, ResearcherOut } from "@/app/api/agent/feed/route";
 
 export function ThesisDetailDrawer({
   card,
@@ -87,6 +87,31 @@ export function ThesisDetailDrawer({
                         target={structured.bearCase?.targetPrice}
                         base={structured.basePrice}
                       />
+                    </div>
+                  </section>
+                )}
+
+                {data?.multiAgent && (data.multiAgent.bull || data.multiAgent.bear) && (
+                  <section>
+                    <SectionTitle>Bull / bear debate</SectionTitle>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      {data.multiAgent.bull && (
+                        <ResearcherCard r={data.multiAgent.bull} />
+                      )}
+                      {data.multiAgent.bear && (
+                        <ResearcherCard r={data.multiAgent.bear} />
+                      )}
+                    </div>
+                  </section>
+                )}
+
+                {data?.multiAgent?.analysts && data.multiAgent.analysts.length > 0 && (
+                  <section>
+                    <SectionTitle>Analyst views</SectionTitle>
+                    <div className="space-y-2">
+                      {data.multiAgent.analysts.map((a) => (
+                        <AnalystCard key={a.perspective} a={a} />
+                      ))}
                     </div>
                   </section>
                 )}
@@ -293,6 +318,67 @@ function CatalystTable({ rows }: { rows: ThesisCatalystOut[] }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ResearcherCard({ r }: { r: ResearcherOut }) {
+  const isBull = r.stance === "bull";
+  const accent = isBull ? "text-gain" : "text-loss";
+  const border = isBull ? "border-gain/40 bg-gain/5" : "border-loss/40 bg-loss/5";
+  return (
+    <div className={cn("rounded-md border p-3", border)}>
+      <div className="flex items-baseline justify-between">
+        <span className={cn("text-[10px] font-semibold uppercase tracking-widest", accent)}>
+          {r.stance} researcher
+        </span>
+        <span className="text-xs tabular-nums">
+          {r.targetPrice != null && (
+            <span className={accent}>${r.targetPrice.toFixed(2)}</span>
+          )}
+          <span className="ml-2 text-muted-foreground">conf {r.confidence}/10</span>
+        </span>
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed">{r.thesis}</p>
+      {r.mustBeTrue.length > 0 && (
+        <div className="mt-2">
+          <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
+            Must be true
+          </div>
+          <ul className="mt-0.5 list-inside list-disc space-y-0.5 text-[11px]">
+            {r.mustBeTrue.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalystCard({ a }: { a: AnalystOut }) {
+  const signalColor = {
+    bullish: "text-gain border-gain/40 bg-gain/10",
+    bearish: "text-loss border-loss/40 bg-loss/10",
+    mixed: "text-amber-500 border-amber-500/40 bg-amber-500/10",
+    noise: "text-muted-foreground border-muted-foreground/30 bg-muted",
+  }[a.signalQuality];
+  return (
+    <div className="rounded-md border bg-card p-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-widest">{a.perspective}</span>
+        <span className={cn("rounded-sm border px-1.5 py-0.5 text-[9px] uppercase", signalColor)}>
+          {a.signalQuality}
+        </span>
+      </div>
+      <p className="mt-1.5 text-xs leading-relaxed">{a.summary}</p>
+      {a.bullets.length > 0 && (
+        <ul className="mt-1.5 list-inside list-disc space-y-0.5 text-[11px] text-muted-foreground">
+          {a.bullets.map((b, i) => (
+            <li key={i}>{b}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

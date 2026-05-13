@@ -14,6 +14,10 @@ export interface Ticker {
   tier: TickerTier;
   notes: string;
   created_at: string;
+  sector?: string | null;
+  industry?: string | null;
+  frame_id?: string | null;
+  benchmark_symbol?: string | null;
 }
 
 export interface ThesisSnapshot {

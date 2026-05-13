@@ -1,62 +1,85 @@
-// ETF fund flow provider. Scrapes etf.com — likely to be blocked by Cloudflare in
-// many environments; falls back to last good DB row. Swap implementation when a paid
-// API (e.g. FMP, ETF Database, Tradier) is available.
+// Sector ETF data provider. Uses Yahoo's quoteSummary (summaryDetail +
+// defaultKeyStatistics + price) to grab AUM, shares outstanding, and spot.
+// Fund flow itself is NOT directly available — we infer it server-side by
+// comparing today's AUM to a baseline snapshot 7d back and stripping out the
+// price-return-explained portion of the AUM change. See /api/etf-flows.
 
-import { scrapeWithRetry } from "@/lib/providers/scraping";
+import YahooFinance from "yahoo-finance2";
+const yahooFinance: any = new (YahooFinance as any)();
 
-export interface EtfFlow {
+export interface EtfSnapshot {
   symbol: string;
-  flowUsd: number | null;   // weekly net flow in USD
-  aum: number | null;
+  aum: number | null;                // totalAssets from summaryDetail
+  sharesOutstanding: number | null;  // defaultKeyStatistics.sharesOutstanding
+  price: number | null;              // regularMarketPrice
+  name: string | null;
   fetchedAt: string;
-  source: "live" | "stale" | "unavailable";
-  fetchedAtSource?: string; // when the live page reported the data
+  source: "live" | "unavailable";
 }
 
 export interface EtfFlowsProvider {
-  weekly(symbol: string): Promise<EtfFlow>;
+  snapshot(symbol: string): Promise<EtfSnapshot>;
+  snapshotBatch(symbols: string[]): Promise<EtfSnapshot[]>;
 }
 
-class EtfDotComProvider implements EtfFlowsProvider {
-  async weekly(symbol: string): Promise<EtfFlow> {
-    const url = `https://www.etf.com/${symbol}`;
+class YahooEtfProvider implements EtfFlowsProvider {
+  async snapshot(symbol: string): Promise<EtfSnapshot> {
+    const blank: EtfSnapshot = {
+      symbol,
+      aum: null,
+      sharesOutstanding: null,
+      price: null,
+      name: null,
+      fetchedAt: new Date().toISOString(),
+      source: "unavailable",
+    };
     try {
-      const html = await scrapeWithRetry(url, { source: "etf.com", symbol });
-      const aum = matchMoneyAfter(html, /AUM\s*<\/[^>]*>\s*<[^>]*>\s*\$?([\d.,]+\s*[BMK]?)/i);
-      const flow = matchMoneyAfter(html, /Fund Flows\s*\((1|4|13|26|52)?\s*Week[^)]*\)\s*<\/[^>]*>\s*<[^>]*>\s*\$?(-?[\d.,]+\s*[BMK]?)/i, 2);
+      const summary = await yahooFinance.quoteSummary(symbol, {
+        modules: ["summaryDetail", "defaultKeyStatistics", "price"],
+      });
+      const sd = summary?.summaryDetail ?? {};
+      const ks = summary?.defaultKeyStatistics ?? {};
+      const pr = summary?.price ?? {};
+
+      // Yahoo returns numbers OR objects shaped {raw, fmt}. Normalize.
+      const aum = numFrom(sd.totalAssets);
+      const sharesOutstanding = numFrom(ks.sharesOutstanding);
+      const price = numFrom(pr.regularMarketPrice);
+      const name = typeof pr.longName === "string" ? pr.longName : typeof pr.shortName === "string" ? pr.shortName : null;
+
+      if (aum == null && price == null) return blank;
+
       return {
         symbol,
-        flowUsd: flow,
         aum,
+        sharesOutstanding,
+        price,
+        name,
         fetchedAt: new Date().toISOString(),
         source: "live",
       };
-    } catch {
-      return {
-        symbol,
-        flowUsd: null,
-        aum: null,
-        fetchedAt: new Date().toISOString(),
-        source: "unavailable",
-      };
+    } catch (err) {
+      console.warn("YahooEtfProvider.snapshot error", symbol, err);
+      return blank;
     }
+  }
+
+  async snapshotBatch(symbols: string[]): Promise<EtfSnapshot[]> {
+    return Promise.all(symbols.map((s) => this.snapshot(s)));
   }
 }
 
-// Very loose parser — etf.com markup changes often. On miss, returns null and the
-// API route serves the last good DB row with a stale badge.
-function matchMoneyAfter(html: string, regex: RegExp, group = 1): number | null {
-  const m = html.match(regex);
-  if (!m || !m[group]) return null;
-  const raw = m[group].replace(/[$,\s]/g, "");
-  const mult = raw.endsWith("B") ? 1e9 : raw.endsWith("M") ? 1e6 : raw.endsWith("K") ? 1e3 : 1;
-  const n = parseFloat(raw);
-  if (!Number.isFinite(n)) return null;
-  return n * mult;
+function numFrom(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (v && typeof v === "object" && "raw" in (v as Record<string, unknown>)) {
+    const raw = (v as { raw: unknown }).raw;
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  }
+  return null;
 }
 
 let provider: EtfFlowsProvider | undefined;
 export function getEtfFlowsProvider(): EtfFlowsProvider {
-  if (!provider) provider = new EtfDotComProvider();
+  if (!provider) provider = new YahooEtfProvider();
   return provider;
 }

@@ -1,13 +1,20 @@
-// NewsAPI provider. Free tier disallows server-side production use; on Vercel
-// these calls will be blocked. For Phase 2 the news component degrades to an
-// empty array, and the agent prompt continues without news context.
+// News provider with a layered strategy:
+//   - For PER-TICKER news (forSymbol): prefer Finnhub's /company-news endpoint
+//     which returns articles actually tagged to that ticker. Free tier = 60/min.
+//   - If Finnhub isn't configured OR returns no results, fall back to NewsAPI
+//     with STRICT TITLE FILTERING (title must contain the ticker or the
+//     company name) so we don't surface sector roundups.
+//   - For free-form macro/sector SEARCH: use NewsAPI as-is (broad query is the
+//     point).
+
+import { finnhubCompanyNews } from "@/lib/providers/finnhub";
 
 export interface NewsHeadline {
   title: string;
   description: string | null;
   source: string | null;
   url: string;
-  publishedAt: string; // ISO
+  publishedAt: string;
 }
 
 interface NewsApiResponse {
@@ -27,12 +34,39 @@ export interface NewsProvider {
   search(query: string, hoursBack?: number): Promise<NewsHeadline[]>;
 }
 
-class NewsApiProvider implements NewsProvider {
-  async forSymbol(symbol: string, hoursBack = 24): Promise<NewsHeadline[]> {
-    return this.search(`"${symbol}" OR ${nameHintFor(symbol)}`, hoursBack);
+class HybridNewsProvider implements NewsProvider {
+  async forSymbol(symbol: string, hoursBack = 48): Promise<NewsHeadline[]> {
+    // 1. Finnhub (preferred) — articles are pre-tagged by ticker.
+    const finn = await finnhubCompanyNews(symbol, { hoursBack });
+    if (finn.length > 0) {
+      return finn
+        .map((a) => ({
+          title: a.headline,
+          description: a.summary || null,
+          source: a.source || null,
+          url: a.url,
+          publishedAt: new Date(a.datetime * 1000).toISOString(),
+        }))
+        .filter((a) => a.title && a.url);
+    }
+
+    // 2. NewsAPI fallback with strict title filtering.
+    const name = nameHintFor(symbol);
+    const candidates = await this.search(`"${symbol}" OR "${name}"`, hoursBack);
+    const sym = symbol.toUpperCase();
+    const nameLower = name.toLowerCase();
+    return candidates.filter((a) => {
+      const t = (a.title ?? "").toLowerCase();
+      const d = (a.description ?? "").toLowerCase();
+      // Title must mention the ticker (as a word) OR the company name.
+      const hasTickerInTitle = new RegExp(`\\b${sym}\\b`).test(t.toUpperCase());
+      const hasNameInTitle = nameLower.length >= 4 && t.includes(nameLower);
+      const hasNameInDesc = nameLower.length >= 4 && d.includes(nameLower);
+      return hasTickerInTitle || hasNameInTitle || hasNameInDesc;
+    });
   }
 
-  async search(query: string, hoursBack = 24): Promise<NewsHeadline[]> {
+  async search(query: string, hoursBack = 48): Promise<NewsHeadline[]> {
     const key = process.env.NEWS_API_KEY?.trim();
     if (!key) return [];
 
@@ -88,6 +122,6 @@ function nameHintFor(symbol: string): string {
 
 let _provider: NewsProvider | undefined;
 export function getNewsProvider(): NewsProvider {
-  if (!_provider) _provider = new NewsApiProvider();
+  if (!_provider) _provider = new HybridNewsProvider();
   return _provider;
 }

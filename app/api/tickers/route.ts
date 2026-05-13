@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createServerSupabase } from "@/lib/supabase/server";
+import { getCompanyProfile } from "@/lib/providers/quotes";
+import { pickFrame } from "@/lib/agent/industryFrames";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +40,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  // Best-effort industry/sector lookup so the agent picks the right frame on
+  // first thesis run. Failure is non-fatal — lazy backfill happens on demand.
+  let sector: string | null = null;
+  let industry: string | null = null;
+  let frameId: string | null = null;
+  let benchmarkSymbol: string | null = null;
+  try {
+    const profile = await getCompanyProfile(parsed.data.symbol);
+    sector = profile.sector;
+    industry = profile.industry;
+    const frame = pickFrame(sector, industry);
+    frameId = frame.id;
+    benchmarkSymbol = frame.benchmarkSymbol;
+  } catch (err) {
+    console.warn("getCompanyProfile failed on insert", parsed.data.symbol, err);
+  }
+
   const { data, error } = await supabase
     .from("tickers")
     .insert({
@@ -46,6 +65,10 @@ export async function POST(req: NextRequest) {
       name: parsed.data.name || parsed.data.symbol,
       tier: parsed.data.tier as 1 | 2 | 3,
       notes: parsed.data.notes ?? "",
+      sector,
+      industry,
+      frame_id: frameId,
+      benchmark_symbol: benchmarkSymbol,
     })
     .select("*")
     .single();

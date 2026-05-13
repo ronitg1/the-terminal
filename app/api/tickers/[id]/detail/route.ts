@@ -17,7 +17,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .single();
   if (tErr || !ticker) return NextResponse.json({ error: tErr?.message ?? "not found" }, { status: 404 });
 
-  const [{ data: thesis }, { data: si }, { data: rev }, history] = await Promise.all([
+  const [{ data: thesis }, { data: si }, { data: rev }, { data: transcripts }, history] = await Promise.all([
     supabase
       .from("thesis_snapshots")
       .select("*")
@@ -36,6 +36,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       .eq("symbol", ticker.symbol)
       .order("fetched_at", { ascending: false })
       .limit(10),
+    supabase
+      .from("transcript_analyses")
+      .select("id,sentiment_score,tone_delta,data,generated_at")
+      .eq("symbol", ticker.symbol)
+      .order("generated_at", { ascending: false })
+      .limit(8),
     getQuotesProvider().history(ticker.symbol, "1y"),
   ]);
 
@@ -44,6 +50,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     latestThesis: thesis?.[0] ?? null,
     shortInterestHistory: si ?? [],
     estimateRevisions: rev ?? [],
+    transcripts: transcripts ?? [],
     priceHistory: history,
   });
 }

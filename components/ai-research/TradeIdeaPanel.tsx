@@ -30,17 +30,46 @@ interface TradeDetails {
   estimatedCostUsd?: number | null;
 }
 
+interface SizingBlock {
+  capitalAtRiskUsd?: number | null;
+  maxLossUsd?: number | null;
+  pctOfBook?: number | null;
+  narrative?: string;
+}
+
+interface RiskRewardBlock {
+  targetGainUsd?: number | null;
+  rMultiple?: number | null;
+  narrative?: string;
+}
+
+interface EntryPlanBlock {
+  trigger?: string;
+  limitPrice?: number | null;
+  validUntil?: string;
+}
+
+interface ExitPlanBlock {
+  priceTargetUp?: number | null;
+  priceTargetDown?: number | null;
+  trimOnBeat?: string;
+  stopOnMiss?: string;
+  timeStop?: string;
+}
+
 interface TradeIdea {
   symbol: string;
   rationale: string;
   structure: string;
+  directionalBias?: "bullish" | "bearish" | "neutral_vol";
   tradeDetails?: TradeDetails;
-  sizing: string;
+  sizing: SizingBlock | string;          // legacy rows stored a free-form string
+  riskReward?: RiskRewardBlock;
+  entryPlan?: EntryPlanBlock;
+  exitPlan?: ExitPlanBlock | { trimOnBeat: string; stopOnMiss: string };
+  expectedHoldingDays?: number | null;
+  successProbability?: number | null;
   risks: string[];
-  exitPlan: {
-    trimOnBeat: string;
-    stopOnMiss: string;
-  };
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -195,19 +224,99 @@ export function TradeIdeaPanel() {
 }
 
 function IdeaBody({ idea }: { idea: TradeIdea }) {
+  const sizing: SizingBlock | null =
+    typeof idea.sizing === "object" && idea.sizing !== null ? (idea.sizing as SizingBlock) : null;
+  const sizingText = typeof idea.sizing === "string" ? idea.sizing : null;
+  const exitPlan = idea.exitPlan as ExitPlanBlock | undefined;
+
   return (
     <div className="space-y-3">
-      <div className="flex items-baseline gap-2">
+      <div className="flex flex-wrap items-baseline gap-2">
         <span className="text-base font-semibold">{idea.symbol}</span>
         <span className="rounded-sm border bg-accent px-1.5 py-0.5 text-[10px] uppercase">
           {prettyStructure(idea.structure)}
         </span>
+        {idea.directionalBias && (
+          <span
+            className={cn(
+              "rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+              idea.directionalBias === "bullish" && "border-gain/40 bg-gain/10 text-gain",
+              idea.directionalBias === "bearish" && "border-loss/40 bg-loss/10 text-loss",
+              idea.directionalBias === "neutral_vol" && "border-muted-foreground/40 bg-muted text-muted-foreground",
+            )}
+          >
+            {idea.directionalBias === "neutral_vol" ? "vol play" : idea.directionalBias}
+          </span>
+        )}
+        {idea.successProbability != null && (
+          <span className="ml-auto rounded-sm border bg-secondary px-1.5 py-0.5 font-mono text-[10px]">
+            conv {idea.successProbability}/10
+          </span>
+        )}
       </div>
       <Field label="Rationale">{idea.rationale}</Field>
       <ContractsBlock details={idea.tradeDetails} />
-      <Field label="Sizing">{idea.sizing}</Field>
-      <Field label="Trim on beat">{idea.exitPlan?.trimOnBeat}</Field>
-      <Field label="Stop on miss">{idea.exitPlan?.stopOnMiss}</Field>
+
+      {/* Risk / sizing summary tiles */}
+      {(sizing?.capitalAtRiskUsd != null ||
+        sizing?.maxLossUsd != null ||
+        idea.riskReward?.rMultiple != null ||
+        idea.riskReward?.targetGainUsd != null ||
+        idea.expectedHoldingDays != null ||
+        idea.entryPlan?.limitPrice != null) && (
+        <Field label="Risk &amp; reward">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {sizing?.maxLossUsd != null && (
+              <Stat label="Max loss" value={`$${Math.round(sizing.maxLossUsd).toLocaleString()}`} tone="loss" />
+            )}
+            {sizing?.capitalAtRiskUsd != null && sizing.capitalAtRiskUsd !== sizing.maxLossUsd && (
+              <Stat label="Capital at risk" value={`$${Math.round(sizing.capitalAtRiskUsd).toLocaleString()}`} />
+            )}
+            {sizing?.pctOfBook != null && (
+              <Stat label="% of book" value={`${sizing.pctOfBook.toFixed(2)}%`} />
+            )}
+            {idea.riskReward?.targetGainUsd != null && (
+              <Stat label="Target gain" value={`$${Math.round(idea.riskReward.targetGainUsd).toLocaleString()}`} tone="gain" />
+            )}
+            {idea.riskReward?.rMultiple != null && (
+              <Stat label="R:R" value={`${idea.riskReward.rMultiple.toFixed(2)}x`} tone={idea.riskReward.rMultiple >= 1.5 ? "gain" : undefined} />
+            )}
+            {idea.expectedHoldingDays != null && (
+              <Stat label="Hold" value={`${idea.expectedHoldingDays}d`} />
+            )}
+            {idea.entryPlan?.limitPrice != null && (
+              <Stat label="Limit" value={`$${idea.entryPlan.limitPrice}`} />
+            )}
+          </div>
+          {(sizing?.narrative || idea.riskReward?.narrative || sizingText) && (
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {sizing?.narrative || idea.riskReward?.narrative || sizingText}
+            </p>
+          )}
+        </Field>
+      )}
+
+      {idea.entryPlan?.trigger && idea.entryPlan.trigger !== "now" && (
+        <Field label="Entry trigger">{idea.entryPlan.trigger}{idea.entryPlan.validUntil ? ` · valid until ${idea.entryPlan.validUntil}` : ""}</Field>
+      )}
+
+      {(exitPlan?.priceTargetUp != null || exitPlan?.priceTargetDown != null) && (
+        <Field label="Price targets">
+          <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+            {exitPlan?.priceTargetUp != null && (
+              <span className="rounded-sm border border-gain/40 bg-gain/10 px-1.5 py-0.5 text-gain">↑ ${exitPlan.priceTargetUp}</span>
+            )}
+            {exitPlan?.priceTargetDown != null && (
+              <span className="rounded-sm border border-loss/40 bg-loss/10 px-1.5 py-0.5 text-loss">↓ ${exitPlan.priceTargetDown}</span>
+            )}
+          </div>
+        </Field>
+      )}
+
+      {exitPlan?.trimOnBeat && <Field label="Trim on beat">{exitPlan.trimOnBeat}</Field>}
+      {exitPlan?.stopOnMiss && <Field label="Stop on miss">{exitPlan.stopOnMiss}</Field>}
+      {exitPlan?.timeStop && <Field label="Time stop">{exitPlan.timeStop}</Field>}
+
       {idea.risks?.length > 0 && (
         <Field label="Risks">
           <ul className="list-inside list-disc">
@@ -217,6 +326,23 @@ function IdeaBody({ idea }: { idea: TradeIdea }) {
           </ul>
         </Field>
       )}
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: string; tone?: "gain" | "loss" }) {
+  return (
+    <div className="rounded-md border bg-secondary/40 p-1.5">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "mt-0.5 font-mono text-sm font-semibold",
+          tone === "gain" && "text-gain",
+          tone === "loss" && "text-loss",
+        )}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -358,13 +484,17 @@ function rowToIdea(row: TradeIdeaRow): TradeIdea {
       symbol: raw.symbol ?? row.symbol,
       rationale: raw.rationale ?? row.rationale ?? "",
       structure: raw.structure ?? row.structure ?? "",
+      directionalBias: raw.directionalBias,
       tradeDetails: raw.tradeDetails,
       sizing: raw.sizing ?? row.sizing ?? "",
+      riskReward: raw.riskReward,
+      entryPlan: raw.entryPlan,
+      exitPlan:
+        raw.exitPlan ??
+        ({ trimOnBeat: row.trim_on_beat ?? "", stopOnMiss: row.stop_on_miss ?? "" } as ExitPlanBlock),
+      expectedHoldingDays: raw.expectedHoldingDays ?? null,
+      successProbability: raw.successProbability ?? null,
       risks: raw.risks ?? row.risks ?? [],
-      exitPlan: raw.exitPlan ?? {
-        trimOnBeat: row.trim_on_beat ?? "",
-        stopOnMiss: row.stop_on_miss ?? "",
-      },
     };
   }
   return {
@@ -376,6 +506,6 @@ function rowToIdea(row: TradeIdeaRow): TradeIdea {
     exitPlan: {
       trimOnBeat: row.trim_on_beat ?? "",
       stopOnMiss: row.stop_on_miss ?? "",
-    },
+    } as ExitPlanBlock,
   };
 }
