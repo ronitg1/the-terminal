@@ -13,6 +13,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { getNewsProvider, type NewsHeadline } from "@/lib/providers/news";
+import { finnhubMarketNews } from "@/lib/providers/finnhub";
 import { getUserSettings } from "@/lib/settings";
 import {
   getFrameById,
@@ -26,9 +27,18 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
+export type MacroCategory =
+  | "monetary"      // CPI, Fed, FOMC, rates, yields
+  | "geopolitics"   // China, Russia, Ukraine, Israel, sanctions, war
+  | "government"   // Congress, White House, tariffs, debt ceiling, executive orders
+  | "economy"      // GDP, jobs, PMI, retail sales, recession
+  | "energy"       // OPEC, oil, natural gas
+  | "markets";     // default bucket — broad-market / equities / sector
+
 export interface NewsItem extends NewsHeadline {
   relatedSymbol: string | null;
-  inBook?: boolean;   // true if relatedSymbol is one of the user's book tickers
+  inBook?: boolean;        // true if relatedSymbol is one of the user's book tickers
+  macroCategory?: MacroCategory;  // populated only for macro feed items
 }
 
 export interface SectorTicker {
@@ -57,23 +67,68 @@ export interface MyTicker {
   tier: number;
 }
 
+export interface MacroCategoryCount {
+  category: MacroCategory;
+  count: number;
+}
+
 export interface NewsFeedResponse {
   sectors: SectorMeta[];
   current: SectorBlock | null;
   macro: NewsItem[];
+  macroCategoryCounts: MacroCategoryCount[];
   myTickers: MyTicker[];
   generatedAt: string;
 }
 
 const MAX_PER_SECTOR_HEADLINES = 6;
 const MAX_SECTOR_FETCH_TICKERS = 6;
+const MAX_MACRO_ARTICLES = 80;
 
-// Patterns we drop from the macro feed — these are earnings/company-results
-// stories the user already gets from /earnings and /transcripts.
+// Drop earnings/company-results stories from the macro feed — those live on
+// /earnings and /transcripts.
 const EARNINGS_NOISE_RE =
   /\b(earnings|results|q[1-4](?:\s*'?\d{2})?|quarterly|eps|guidance|beats?|misses?|reports?\s+(profit|loss|revenue))\b/i;
-const MACRO_KEEP_RE =
-  /\b(fed|fomc|powell|cpi|ppi|inflation|gdp|jobs|payroll|unemployment|ism|pmi|recession|rate|treasury|yield|tariff|policy|sanction|opec|crude|oil price|election|congress|senate|tax|budget)\b/i;
+
+// Per-category keyword patterns. First match wins (priority order in the
+// `MACRO_CATEGORY_ORDER` constant below).
+const MACRO_CATEGORY_PATTERNS: Array<{ category: MacroCategory; re: RegExp }> = [
+  {
+    category: "monetary",
+    re: /\b(fed|federal reserve|fomc|powell|cpi|ppi|inflation|interest rate|rate cut|rate hike|rate decision|treasury yield|bond yield|yield curve|monetary policy|disinflation)\b/i,
+  },
+  {
+    category: "geopolitics",
+    re: /\b(china|xi jinping|beijing|russia|putin|ukraine|kyiv|moscow|israel|gaza|iran|tehran|sanctions|nato|taiwan|north korea|hamas|hezbollah|red sea|houthis|war\b)\b/i,
+  },
+  {
+    category: "government",
+    re: /\b(congress|senate|house of representatives|biden|trump|white house|debt ceiling|federal budget|government shutdown|executive order|treasury department|tariff|trade deal|export controls|capitol)\b/i,
+  },
+  {
+    category: "economy",
+    re: /\b(gdp|jobs report|payroll|nonfarm|unemployment|jobless claims|ism|pmi|retail sales|consumer confidence|recession|housing starts|durable goods|industrial production)\b/i,
+  },
+  {
+    category: "energy",
+    re: /\b(opec\+?|crude\b|oil price|brent|wti|gasoline|natural gas|saudi arabia|oil supply|oil demand|spr release|strategic petroleum)\b/i,
+  },
+];
+const MACRO_CATEGORY_ORDER: MacroCategory[] = [
+  "monetary",
+  "geopolitics",
+  "government",
+  "economy",
+  "energy",
+  "markets",
+];
+
+function categorizeMacro(text: string): MacroCategory {
+  for (const { category, re } of MACRO_CATEGORY_PATTERNS) {
+    if (re.test(text)) return category;
+  }
+  return "markets";
+}
 
 export async function GET(req: NextRequest) {
   const supabase = createServerSupabase();
@@ -178,18 +233,55 @@ export async function GET(req: NextRequest) {
     current = { ...meta, headlines: merged };
   }
 
-  // 5. Macro feed — same search terms as before, post-filtered to drop earnings noise.
-  const macroPerTerm = await Promise.all(
-    (settings.macroSearchTerms ?? []).map(async (term) => {
-      const items = await news.search(term, hoursBack);
-      return items.slice(0, 6).map((n) => ({ ...n, relatedSymbol: null } as NewsItem));
-    }),
-  );
-  const macroRaw = dedupeByUrl(macroPerTerm.flat()).sort(byPublishedAtDesc);
-  const macro = macroRaw
+  // 5. Macro feed — primary source is Finnhub's /news?category=general which
+  //    works in production (unlike NewsAPI free tier). We also pull the user's
+  //    custom macroSearchTerms via NewsAPI as supplementary, since those can
+  //    be sector-policy specific (FEOC, 45X, etc.).
+  const [finnhubMacro, customMacro] = await Promise.all([
+    finnhubMarketNews("general"),
+    Promise.all(
+      (settings.macroSearchTerms ?? []).map(async (term) => {
+        const items = await news.search(term, hoursBack);
+        return items.slice(0, 5).map((n) => ({ ...n, relatedSymbol: null } as NewsItem));
+      }),
+    ).then((arrs) => arrs.flat()),
+  ]);
+
+  const cutoff = Date.now() - hoursBack * 3600 * 1000;
+  const finnhubItems: NewsItem[] = finnhubMacro
+    .filter((a) => a.headline && a.url && a.datetime * 1000 >= cutoff)
+    .map((a) => {
+      const haystack = `${a.headline} ${a.summary ?? ""}`;
+      return {
+        title: a.headline,
+        description: a.summary || null,
+        source: a.source || null,
+        url: a.url,
+        publishedAt: new Date(a.datetime * 1000).toISOString(),
+        relatedSymbol: null,
+        macroCategory: categorizeMacro(haystack),
+      };
+    });
+
+  const customItems: NewsItem[] = customMacro.map((n) => ({
+    ...n,
+    macroCategory: categorizeMacro(`${n.title} ${n.description ?? ""}`),
+  }));
+
+  const macro = dedupeByUrl([...finnhubItems, ...customItems])
     .filter((a) => !looksLikeEarnings(a))
-    .filter((a, _i, arr) => (arr.length > 40 ? hasMacroSignal(a) : true))
-    .slice(0, 40);
+    .sort(byPublishedAtDesc)
+    .slice(0, MAX_MACRO_ARTICLES);
+
+  // Build counts per category for the UI filter pills.
+  const counts = new Map<MacroCategory, number>();
+  for (const a of macro) {
+    const cat = a.macroCategory ?? "markets";
+    counts.set(cat, (counts.get(cat) ?? 0) + 1);
+  }
+  const macroCategoryCounts: MacroCategoryCount[] = MACRO_CATEGORY_ORDER.filter((c) => counts.has(c)).map(
+    (c) => ({ category: c, count: counts.get(c) ?? 0 }),
+  );
 
   const myTickers: MyTicker[] = myBook.map((t) => ({
     symbol: t.symbol,
@@ -202,6 +294,7 @@ export async function GET(req: NextRequest) {
       sectors,
       current,
       macro,
+      macroCategoryCounts,
       myTickers,
       generatedAt: new Date().toISOString(),
     } satisfies NewsFeedResponse,
@@ -212,10 +305,6 @@ export async function GET(req: NextRequest) {
 function looksLikeEarnings(a: NewsItem): boolean {
   const haystack = `${a.title ?? ""} ${a.description ?? ""}`;
   return EARNINGS_NOISE_RE.test(haystack);
-}
-
-function hasMacroSignal(a: NewsItem): boolean {
-  return MACRO_KEEP_RE.test(`${a.title ?? ""} ${a.description ?? ""}`);
 }
 
 function dedupeByUrl(items: NewsItem[]): NewsItem[] {

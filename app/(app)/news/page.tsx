@@ -10,8 +10,17 @@ import { ArticleCard } from "@/components/news/ArticleCard";
 import { ArticleDetailSheet } from "@/components/news/ArticleDetailSheet";
 import { ReadthroughBanner } from "@/components/news/ReadthroughBanner";
 import { cn } from "@/lib/utils";
-import type { NewsFeedResponse, NewsItem, MyTicker } from "@/app/api/news/feed/route";
+import type { NewsFeedResponse, NewsItem, MyTicker, MacroCategory } from "@/app/api/news/feed/route";
 import type { TickerNewsResponse } from "@/app/api/news/ticker/route";
+
+const MACRO_CATEGORY_LABEL: Record<MacroCategory, string> = {
+  monetary: "Monetary · CPI · Fed",
+  geopolitics: "Geopolitics · War · China",
+  government: "Government · Tariffs",
+  economy: "Economy · Jobs · GDP",
+  energy: "Energy · OPEC · Oil",
+  markets: "Markets",
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -31,11 +40,17 @@ export default function NewsPage() {
 
   const [selected, setSelected] = useState<NewsItem | null>(null);
   const [tickerFilter, setTickerFilter] = useState<string | null>(null);
+  const [macroCategory, setMacroCategory] = useState<MacroCategory | null>(null);
 
   const currentHeadlines = useMemo(() => {
     const items = data?.current?.headlines ?? [];
     return tickerFilter ? items.filter((a) => a.relatedSymbol === tickerFilter) : items;
   }, [data?.current?.headlines, tickerFilter]);
+
+  const macroFiltered = useMemo(() => {
+    const items = data?.macro ?? [];
+    return macroCategory ? items.filter((a) => a.macroCategory === macroCategory) : items;
+  }, [data?.macro, macroCategory]);
 
   // Reset per-ticker filter when switching sectors.
   useEffect(() => {
@@ -84,7 +99,10 @@ export default function NewsPage() {
 
         <ErrorBoundary label="Macro / econ">
           <MacroColumn
-            articles={data?.macro ?? []}
+            articles={macroFiltered}
+            categoryCounts={data?.macroCategoryCounts ?? []}
+            activeCategory={macroCategory}
+            onSelectCategory={setMacroCategory}
             onSelectArticle={setSelected}
             loading={isLoading}
           />
@@ -330,20 +348,62 @@ function TickerSearchColumn({
 
 function MacroColumn({
   articles,
+  categoryCounts,
+  activeCategory,
+  onSelectCategory,
   onSelectArticle,
   loading,
 }: {
   articles: NewsItem[];
+  categoryCounts: NewsFeedResponse["macroCategoryCounts"];
+  activeCategory: MacroCategory | null;
+  onSelectCategory: (c: MacroCategory | null) => void;
   onSelectArticle: (a: NewsItem) => void;
   loading: boolean;
 }) {
+  const subtitle = activeCategory
+    ? `${articles.length} ${MACRO_CATEGORY_LABEL[activeCategory]}`
+    : `${articles.length} articles`;
+
   return (
-    <Column title="Macro / econ" subtitle={`${articles.length} articles`}>
+    <Column
+      title="Macro / econ"
+      subtitle={subtitle}
+      extra={
+        categoryCounts.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            <FilterPill
+              label="all"
+              active={activeCategory === null}
+              onClick={() => onSelectCategory(null)}
+            />
+            {categoryCounts.map((c) => (
+              <button
+                key={c.category}
+                onClick={() =>
+                  onSelectCategory(activeCategory === c.category ? null : c.category)
+                }
+                className={cn(
+                  "rounded-sm border px-1.5 py-0.5 text-[10px] uppercase tracking-wider transition-colors",
+                  activeCategory === c.category
+                    ? "border-foreground bg-foreground text-background"
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                )}
+                title={MACRO_CATEGORY_LABEL[c.category]}
+              >
+                {MACRO_CATEGORY_LABEL[c.category]}
+                <span className="ml-1 opacity-70">{c.count}</span>
+              </button>
+            ))}
+          </div>
+        )
+      }
+    >
       {loading && articles.length === 0 ? (
         <Empty>Loading macro feed…</Empty>
       ) : articles.length === 0 ? (
         <Empty>
-          No macro headlines. Edit search terms on Settings → Macro &amp; sector search.
+          No macro headlines for this filter. Try "all" — or check FINNHUB_API_KEY.
         </Empty>
       ) : (
         <ul className="space-y-2 p-2">

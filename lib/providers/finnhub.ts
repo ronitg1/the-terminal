@@ -42,3 +42,29 @@ export async function finnhubCompanyNews(
     return [];
   }
 }
+
+// Broad market news — Finnhub's /news?category=general returns top financial
+// and macro headlines from major outlets. Works in production (unlike NewsAPI
+// free tier). Categories: general, forex, crypto, merger.
+export async function finnhubMarketNews(
+  category: "general" | "forex" | "crypto" | "merger" = "general",
+): Promise<FinnhubArticle[]> {
+  const key = process.env.FINNHUB_API_KEY?.trim();
+  if (!key) return [];
+
+  const url = `https://finnhub.io/api/v1/news?category=${category}&token=${key}`;
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`Finnhub market news ${res.status}: ${await res.text().catch(() => "")}`);
+      }
+      return [];
+    }
+    const arr = (await res.json()) as FinnhubArticle[];
+    return Array.isArray(arr) ? arr : [];
+  } catch (err) {
+    console.warn("Finnhub market news fetch failed", err);
+    return [];
+  }
+}
