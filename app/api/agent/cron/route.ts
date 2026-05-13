@@ -38,40 +38,58 @@ export async function GET(req: NextRequest) {
     ? `https://${forwardedHost}`
     : (process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin);
 
-  const results = await Promise.allSettled(
-    tickers.map(async (t) => {
-      const res = await fetch(`${origin}/api/agent/cron-worker`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${process.env.CRON_SECRET}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          userId: t.user_id,
-          symbol: t.symbol,
-          companyName: t.name,
-        }),
-        cache: "no-store",
-      });
-      const body = await res.json().catch(() => null);
-      return {
-        ok: res.ok,
+  // Per-ticker outcome bucket. Pending entries mean the child function is
+  // still running independently — it'll insert its thesis snapshot once done.
+  const summaries = tickers.map((t) => ({
+    symbol: t.symbol,
+    pending: true,
+  } as { symbol: string; ok?: boolean; pending?: boolean; error?: string; pushed?: boolean }));
+
+  const dispatched = tickers.map((t, i) =>
+    fetch(`${origin}/api/agent/cron-worker`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${process.env.CRON_SECRET}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        userId: t.user_id,
         symbol: t.symbol,
-        status: res.status,
-        ...(body ?? {}),
-      };
-    }),
+        companyName: t.name,
+      }),
+      cache: "no-store",
+    })
+      .then(async (res) => {
+        const body = await res.json().catch(() => null);
+        summaries[i] = { symbol: t.symbol, ok: res.ok, ...(body ?? {}), pending: false };
+      })
+      .catch((err) => {
+        summaries[i] = {
+          symbol: t.symbol,
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }),
   );
 
-  const summaries = results.map((r) =>
-    r.status === "fulfilled"
-      ? r.value
-      : { ok: false, error: r.reason instanceof Error ? r.reason.message : String(r.reason) },
-  );
+  // Cap parent wait at 50s — leave a 10s margin under the platform cap.
+  // Children that don't finish in time keep running on their own 60s budget.
+  await Promise.race([
+    Promise.allSettled(dispatched),
+    new Promise<void>((resolve) => setTimeout(resolve, 50_000)),
+  ]);
 
-  const ok = summaries.filter((s) => (s as { ok?: boolean }).ok).length;
-  const failed = summaries.length - ok;
-  const pushed = summaries.filter((s) => (s as { pushed?: boolean }).pushed).length;
+  const ok = summaries.filter((s) => s.ok).length;
+  const stillPending = summaries.filter((s) => s.pending).length;
+  const failed = summaries.length - ok - stillPending;
+  const pushed = summaries.filter((s) => s.pushed).length;
 
-  return NextResponse.json({ ok, failed, pushed, total: tickers.length, summaries });
+  return NextResponse.json({
+    ok,
+    failed,
+    pending: stillPending,
+    pushed,
+    total: tickers.length,
+    summaries,
+  });
 }

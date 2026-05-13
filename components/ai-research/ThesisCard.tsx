@@ -10,7 +10,15 @@ import { ThesisDetailDrawer } from "./ThesisDetailDrawer";
 import { timeAgo, cn } from "@/lib/utils";
 import type { FeedThesisCard } from "@/app/api/agent/feed/route";
 
-export function ThesisCard({ card, onRefreshed }: { card: FeedThesisCard; onRefreshed: () => void }) {
+export function ThesisCard({
+  card,
+  onRefreshed,
+  pending,
+}: {
+  card: FeedThesisCard;
+  onRefreshed: () => void;
+  pending?: boolean;
+}) {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -46,7 +54,10 @@ export function ThesisCard({ card, onRefreshed }: { card: FeedThesisCard; onRefr
             setOpen(true);
           }
         }}
-        className="cursor-pointer rounded-md border bg-card p-3 transition-colors hover:border-tier1/60 hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={cn(
+          "cursor-pointer rounded-md border bg-card p-3 transition-colors hover:border-tier1/60 hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          pending && "border-tier1/60 bg-tier1/5",
+        )}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -57,7 +68,15 @@ export function ThesisCard({ card, onRefreshed }: { card: FeedThesisCard; onRefr
                 <ThesisStatusBadge status={latest?.status} />
               </div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                {latest ? `updated ${timeAgo(latest.generated_at)}` : "no snapshot yet"}
+                {pending ? (
+                  <span className="inline-flex items-center gap-1 text-tier1">
+                    <RefreshCw className="h-2.5 w-2.5 animate-spin" /> agent running…
+                  </span>
+                ) : latest ? (
+                  `updated ${timeAgo(latest.generated_at)}`
+                ) : (
+                  "no snapshot yet"
+                )}
               </div>
             </div>
           </div>
