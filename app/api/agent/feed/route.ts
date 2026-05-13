@@ -17,7 +17,15 @@ export interface ThesisCatalystOut {
   expectedImpactPct: string;
 }
 
+export interface ThesisMoatOut {
+  score: number;
+  sources: string[];
+  durability: "weakening" | "stable" | "strengthening";
+  narrative: string;
+}
+
 export interface ThesisStructuredOut {
+  summary?: string;        // tight 1-2 sentence headline (post-moat upgrade)
   variantView: string;
   setup: string;
   drivers: string[];
@@ -26,6 +34,7 @@ export interface ThesisStructuredOut {
   bearCase: { narrative: string; targetPrice: number | null };
   basePrice: number | null;
   positionRisks: string[];
+  moat?: ThesisMoatOut | null;
 }
 
 export interface AnalystOut {

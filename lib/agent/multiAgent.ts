@@ -33,11 +33,19 @@ export interface PipelineContext {
 
 export type SignalQuality = "bullish" | "bearish" | "mixed" | "noise";
 
+export interface MoatAssessment {
+  score: number;           // 1-10
+  sources: string[];
+  durability: "weakening" | "stable" | "strengthening";
+  narrative: string;
+}
+
 export interface AnalystOutput {
   perspective: "news" | "technicals" | "fundamentals";
   signalQuality: SignalQuality;
   summary: string;
   bullets: string[];
+  moat?: MoatAssessment | null;   // populated by the fundamentals analyst only
 }
 
 export interface ResearcherOutput {
@@ -62,7 +70,7 @@ export interface MultiAgentResult {
 // Phase 1 — specialist analysts (run in parallel)
 // ---------------------------------------------------------------------------
 
-const ANALYST_SYSTEM = (perspective: string, focus: string, frame: IndustryFrame) => `You are the ${perspective} analyst, ${frame.personaContext} Your reader is the PM who will synthesize your view with the other analysts.
+const ANALYST_SYSTEM = (perspective: string, focus: string, frame: IndustryFrame, withMoat = false) => `You are the ${perspective} analyst, ${frame.personaContext} Your reader is the PM who will synthesize your view with the other analysts.
 
 Focus exclusively on: ${focus}
 
@@ -73,7 +81,13 @@ Be terse. Output JSON ONLY:
 {
   "signalQuality": "bullish" | "bearish" | "mixed" | "noise",
   "summary": "2-3 sentence read on what your perspective says about this ticker right now",
-  "bullets": ["3-5 specific observations from your perspective — single line each, concrete numbers/dates"]
+  "bullets": ["3-5 specific observations from your perspective — single line each, concrete numbers/dates"]${withMoat ? `,
+  "moat": {
+    "score": 1-10 integer (1 = no defensible advantage, 5 = average, 10 = dominant durable moat like TSMC/Visa/Microsoft),
+    "sources": ["2-4 specific sources of advantage. Examples: 'switching costs in payroll software', 'network effects in marketplace', 'scale advantage in foundry capex', 'regulatory barriers in banking', 'IP / patent portfolio'. If this is an ETF/index, write 'n/a — diversified holding'."],
+    "durability": "weakening" | "stable" | "strengthening",
+    "narrative": "1-2 sentences: what specifically makes the moat that score. Cite evidence (margins, market share trajectory, retention, pricing power, switching costs in dollars)."
+  }` : ""}
 }
 
 No preamble, no markdown fences.`;
@@ -83,20 +97,33 @@ async function runAnalyst(
   systemPrompt: string,
   userPrompt: string,
 ): Promise<AnalystOutput> {
+  // Fundamentals analyst gets a larger budget because it also produces the moat
+  // assessment block.
+  const maxTokens = perspective === "fundamentals" ? 1200 : 800;
   const completion = await llmComplete({
     purpose: "thesis",
     system: systemPrompt,
     user: userPrompt,
-    maxTokens: 800,
+    maxTokens,
     jsonResponse: true,
   });
   const parsed = parseLenientJson<Record<string, unknown>>(completion.text);
-  return {
+  const out: AnalystOutput = {
     perspective,
     signalQuality: normalizeSignal(parsed.signalQuality),
     summary: String(parsed.summary ?? "").trim(),
     bullets: Array.isArray(parsed.bullets) ? parsed.bullets.map(String).filter(Boolean).slice(0, 6) : [],
   };
+  if (perspective === "fundamentals" && parsed.moat && typeof parsed.moat === "object") {
+    const m = parsed.moat as Record<string, unknown>;
+    out.moat = {
+      score: clampInt(m.score, 1, 10),
+      sources: Array.isArray(m.sources) ? m.sources.map(String).filter(Boolean).slice(0, 5) : [],
+      durability: m.durability === "weakening" || m.durability === "strengthening" ? m.durability : "stable",
+      narrative: String(m.narrative ?? "").trim(),
+    };
+  }
+  return out;
 }
 
 function newsAnalystPrompt(ctx: PipelineContext): string {
@@ -150,7 +177,16 @@ ESTIMATE DATA:
 - Prior thesis (conviction ${ctx.existingConviction ?? "—"}/10):
 ${ctx.existingThesis?.trim() || "(no prior thesis on record)"}
 
-What do estimate revisions, consensus positioning, and the prior thesis tell us about where buyside expectations sit relative to sellside? Where is the variant view? What does the model know that consensus doesn't, or vice versa?`;
+Two tasks:
+
+1. Where is the variant view? What do estimate revisions, consensus positioning, and the prior thesis tell us about where buyside expectations sit relative to sellside? What does the model know that consensus doesn't, or vice versa? Cover this in summary + bullets.
+
+2. Score this company's MOAT on a 1-10 scale. What's defensible about its position? Be honest and specific:
+   - 1-3 = commodity-like business, no pricing power, easily disrupted
+   - 4-6 = some advantages (brand, distribution, scale) but contestable
+   - 7-8 = strong, durable advantages (switching costs, network effects, regulatory)
+   - 9-10 = dominant, durable, widening moat (TSMC, Visa, Microsoft tier)
+   For ETFs or diversified holdings, score the score field as 5 and put "n/a — diversified holding" in sources.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +261,7 @@ Output JSON ONLY — mirrors the existing thesis schema. Be concise; the UI rend
 {
   "status": "intact" | "strengthened" | "weakened" | "broken",
   "conviction": 1-10 integer (your synthesis, NOT an average of bull/bear confidences),
+  "summary": "1-2 sentences. The most concise possible synthesis — what would you tell a colleague in one breath? This is the headline shown on the card.",
   "keyDevelopment": "1-2 sentences. The single most important fact driving your view.",
   "variantView": "2-3 sentences. The differentiated take vs sellside / market consensus.",
   "setup": "2-4 sentences. How the stock is positioned into the next print.",
@@ -237,10 +274,16 @@ Output JSON ONLY — mirrors the existing thesis schema. Be concise; the UI rend
   "basePrice": 195,
   "positionRisks": ["3-5 bullets. Quantified where possible."],
   "watch": ["3-5 specific items to monitor before next print."],
+  "moat": {
+    "score": 1-10 integer (carry over the fundamentals analyst's moat score; trust their assessment unless you have specific reason to override),
+    "sources": ["2-4 specific sources of advantage — keep concrete"],
+    "durability": "weakening" | "stable" | "strengthening",
+    "narrative": "1-2 sentences explaining the score in PM voice"
+  },
   "sources": [{"title": "...", "url": "...", "publishedAt": "ISO date"}]
 }
 
-Do not include narrative outside the JSON. Conviction must reflect the weight of evidence: if bull/bear are evenly matched, conviction sits 4-6; if one clearly dominates, weight toward that side. Status is your honest call.`;
+Do not include narrative outside the JSON. Conviction must reflect the weight of evidence: if bull/bear are evenly matched, conviction sits 4-6; if one clearly dominates, weight toward that side. Status is your honest call. The summary should be the tightest possible compression — if someone read only that one line, they'd know your view.`;
 
 async function runSynthesizer(
   ctx: PipelineContext,
@@ -249,7 +292,14 @@ async function runSynthesizer(
   bear: ResearcherOutput,
 ): Promise<Record<string, unknown>> {
   const analystBlock = analysts
-    .map((a) => `### ${a.perspective.toUpperCase()} ANALYST (${a.signalQuality})\n${a.summary}\n${a.bullets.map((b) => `- ${b}`).join("\n")}`)
+    .map((a) => {
+      const base = `### ${a.perspective.toUpperCase()} ANALYST (${a.signalQuality})\n${a.summary}\n${a.bullets.map((b) => `- ${b}`).join("\n")}`;
+      if (a.moat) {
+        const moatBlock = `\n\nMoat score: ${a.moat.score}/10 (${a.moat.durability})\nSources: ${a.moat.sources.join("; ")}\n${a.moat.narrative}`;
+        return base + moatBlock;
+      }
+      return base;
+    })
     .join("\n\n");
 
   const newsSources = ctx.news.slice(0, 6).map((n) => ({ title: n.title, url: n.url, publishedAt: n.publishedAt }));
@@ -323,8 +373,9 @@ export async function runMultiAgentThesis(ctx: PipelineContext): Promise<MultiAg
       "fundamentals",
       ANALYST_SYSTEM(
         "fundamentals + estimate revisions",
-        "consensus EPS / revenue trajectory, recent revision direction, buyside vs sellside positioning, balance sheet, margin trajectory.",
+        "consensus EPS / revenue trajectory, recent revision direction, buyside vs sellside positioning, balance sheet, margin trajectory, and the company's competitive moat.",
         ctx.frame,
+        true, // include moat assessment
       ),
       fundamentalsAnalystPrompt(ctx),
     ),

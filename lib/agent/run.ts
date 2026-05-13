@@ -186,7 +186,24 @@ function parseSynthesizedOutput(parsed: Record<string, unknown>, news: { title: 
     targetPrice: toNumber(raw?.targetPrice),
   });
 
+  // Parse moat block — null if missing or malformed.
+  let moat: ThesisStructured["moat"] = null;
+  if (parsed.moat && typeof parsed.moat === "object") {
+    const m = parsed.moat as Record<string, unknown>;
+    const score = clampInt(m.score, 1, 10);
+    if (score) {
+      moat = {
+        score,
+        sources: strArray(m.sources, 5),
+        durability:
+          m.durability === "weakening" || m.durability === "strengthening" ? m.durability : "stable",
+        narrative: String(m.narrative ?? "").trim(),
+      };
+    }
+  }
+
   const structured: ThesisStructured = {
+    summary: String(parsed.summary ?? "").trim(),
     variantView: String(parsed.variantView ?? "").trim(),
     setup: String(parsed.setup ?? "").trim(),
     drivers: strArray(parsed.drivers, 8),
@@ -195,6 +212,7 @@ function parseSynthesizedOutput(parsed: Record<string, unknown>, news: { title: 
     bearCase: parseCase(parsed.bearCase),
     basePrice: toNumber(parsed.basePrice),
     positionRisks: strArray(parsed.positionRisks, 8),
+    moat,
   };
 
   // Build a markdown `content` body server-side from the structured fields.

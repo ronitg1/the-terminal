@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, Shield } from "lucide-react";
 import { Line, LineChart, ResponsiveContainer, YAxis } from "recharts";
 import { Button } from "@/components/ui/button";
 import { ThesisStatusBadge } from "@/components/book/ThesisStatusBadge";
@@ -22,6 +22,7 @@ export function ThesisCard({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   async function runNow(e: React.MouseEvent) {
     e.stopPropagation();
@@ -66,6 +67,9 @@ export function ThesisCard({
               <div className="flex items-baseline gap-2">
                 <span className="text-base font-semibold">{card.symbol}</span>
                 <ThesisStatusBadge status={latest?.status} />
+                {latest?.data?.structured?.moat?.score != null && (
+                  <MoatBadge score={latest.data.structured.moat.score} />
+                )}
               </div>
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 {pending ? (
@@ -87,15 +91,40 @@ export function ThesisCard({
         </div>
 
         {latest && (
-          <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-xs text-muted-foreground">
-            {latest.content}
-          </p>
-        )}
+          <>
+            {/* Concise summary (preferred). Falls back to a truncated full
+                content for older snapshots before the moat upgrade. */}
+            <p className="mt-2 whitespace-pre-wrap text-xs leading-snug">
+              {latest.data?.structured?.summary?.trim() ||
+                (latest.content ?? "").trim().split("\n\n")[0] ||
+                "No summary available."}
+            </p>
 
-        {latest && (
-          <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground/70">
-            Click to read full thesis
-          </div>
+            {(latest.data?.structured?.summary || latest.content) && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded((v) => !v);
+                }}
+                className="mt-1.5 inline-flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+              >
+                {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                {expanded ? "Hide details" : "Show details"}
+              </button>
+            )}
+
+            {expanded && latest.content && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="mt-2 whitespace-pre-wrap rounded-md border bg-secondary/40 p-2 text-[11px] leading-relaxed text-muted-foreground"
+              >
+                {latest.content}
+                <div className="mt-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                  Click card for the full structured drawer
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {card.history.length > 1 && (
@@ -121,5 +150,29 @@ export function ThesisCard({
 
       <ThesisDetailDrawer card={card} open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+function MoatBadge({ score }: { score: number }) {
+  // Tier: 1-3 = weak, 4-6 = average, 7-8 = strong, 9-10 = dominant.
+  const tier =
+    score >= 9 ? "dominant" : score >= 7 ? "strong" : score >= 4 ? "average" : "weak";
+  const cls =
+    score >= 7
+      ? "border-gain/40 bg-gain/10 text-gain"
+      : score >= 4
+      ? "border-amber-500/40 bg-amber-500/10 text-amber-500"
+      : "border-loss/40 bg-loss/10 text-loss";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-sm border px-1 py-0 text-[10px] font-semibold uppercase tracking-wider",
+        cls,
+      )}
+      title={`Moat ${score}/10 — ${tier}`}
+    >
+      <Shield className="h-2.5 w-2.5" />
+      {score}/10
+    </span>
   );
 }

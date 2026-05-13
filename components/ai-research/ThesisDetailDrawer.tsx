@@ -55,6 +55,27 @@ export function ThesisDetailDrawer({
                   </section>
                 )}
 
+                {structured?.moat && (
+                  <section>
+                    <SectionTitle>Moat — {structured.moat.score}/10 · {structured.moat.durability}</SectionTitle>
+                    <div className="rounded-md border bg-card p-3">
+                      <p className="text-sm leading-relaxed">{structured.moat.narrative}</p>
+                      {structured.moat.sources.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {structured.moat.sources.map((s, i) => (
+                            <span
+                              key={i}
+                              className="rounded-sm border bg-secondary/50 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground"
+                            >
+                              {s}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                )}
+
                 {structured?.variantView && (
                   <section>
                     <SectionTitle>Variant view</SectionTitle>
