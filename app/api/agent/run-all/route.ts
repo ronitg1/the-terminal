@@ -1,11 +1,16 @@
+// Run-all T1 thesis refresh. Fans out to /api/agent/run/[symbol] in parallel
+// so each ticker gets its own 60s Vercel function invocation (Hobby plan cap)
+// instead of all tickers sharing one 60s budget sequentially.
+//
+// Parent wall time stays under 60s because the fan-out runs in parallel — if
+// each ticker takes 30s, the parent waits 30s, not 30s × N.
+
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
-import { runThesisForSymbol } from "@/lib/agent/run";
-import { BudgetExceededError } from "@/lib/billing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   const supabase = createServerSupabase();
@@ -20,41 +25,64 @@ export async function POST(req: NextRequest) {
   if (tierFilter && [1, 2, 3].includes(tierFilter)) {
     q = q.eq("tier", tierFilter);
   } else {
-    q = q.eq("tier", 1); // default: T1 only
+    q = q.eq("tier", 1);
   }
   const { data: tickers, error } = await q.order("symbol");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Run sequentially — prompt caching benefits from same-process serial calls,
-  // and we avoid stampeding the Anthropic API + Yahoo from a single cron tick.
-  const summaries = [];
-  let budgetHit = false;
-  for (const t of tickers ?? []) {
-    try {
-      const summary = await runThesisForSymbol({
-        symbol: t.symbol as string,
-        companyName: (t.name as string | null) ?? null,
-        userId: user.user.id,
-        supabase,
-      });
-      summaries.push(summary);
-    } catch (err) {
-      if (err instanceof BudgetExceededError) {
-        // Stop the loop — every subsequent call would fail the same way.
-        budgetHit = true;
-        summaries.push({ symbol: t.symbol, error: err.message, budgetExceeded: true });
-        break;
+  // Resolve own origin so we can call our own /api/agent/run/[symbol] route.
+  // Prefer the request origin (handles preview deployments + custom domains);
+  // fall back to NEXT_PUBLIC_SITE_URL for environments where origin isn't
+  // reliably populated.
+  const origin =
+    req.headers.get("origin") ??
+    req.headers.get("x-forwarded-host")
+      ? `https://${req.headers.get("x-forwarded-host")}`
+      : process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin;
+
+  // Forward cookies so the downstream route authenticates as the same user.
+  const cookieHeader = req.headers.get("cookie") ?? "";
+
+  const fanoutResults = await Promise.allSettled(
+    (tickers ?? []).map(async (t) => {
+      const symbol = t.symbol as string;
+      try {
+        const res = await fetch(`${origin}/api/agent/run/${encodeURIComponent(symbol)}`, {
+          method: "POST",
+          headers: {
+            cookie: cookieHeader,
+            "content-type": "application/json",
+          },
+          cache: "no-store",
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) {
+          return {
+            symbol,
+            error: typeof body?.error === "string" ? body.error : `HTTP ${res.status}`,
+            status: res.status,
+            budgetExceeded: res.status === 402,
+          };
+        }
+        return body;
+      } catch (err) {
+        return {
+          symbol,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
-      console.error("agent run-all failed", t.symbol, err);
-      summaries.push({
-        symbol: t.symbol,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+    }),
+  );
+
+  const summaries = fanoutResults.map((r) =>
+    r.status === "fulfilled"
+      ? r.value
+      : { error: r.reason instanceof Error ? r.reason.message : String(r.reason) },
+  );
+  const budgetHit = summaries.some((s) => s && (s as { budgetExceeded?: boolean }).budgetExceeded);
 
   return NextResponse.json(
     { count: summaries.length, summaries, budgetExceeded: budgetHit },
-    { status: budgetHit && summaries.length === 1 ? 402 : 200 },
+    { status: 200 },
   );
 }

@@ -1,14 +1,14 @@
-// Vercel cron entry point — runs every 2h on weekdays 9am-6pm ET (see vercel.json).
-// Uses the service-role client to iterate every user's T1 tickers.
+// Cron dispatcher. Fetches every user's T1 tickers and fans out a parallel
+// HTTP call per (user, symbol) to /api/agent/cron-worker. Each worker gets
+// its own 60s function budget on Vercel Hobby — the dispatcher itself just
+// dispatches and aggregates, so it stays well under the platform timeout.
+
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabase } from "@/lib/supabase/admin";
-import { runThesisForSymbol } from "@/lib/agent/run";
-import { sendPushToUser } from "@/lib/push";
-import { getUserSettings } from "@/lib/settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get("authorization");
@@ -24,54 +24,54 @@ export async function GET(req: NextRequest) {
     .eq("tier", 1);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const tickers = (data ?? []) as Array<{ user_id: string; symbol: string; name: string | null; tier: number }>;
+  const tickers = (data ?? []) as Array<{
+    user_id: string;
+    symbol: string;
+    name: string | null;
+    tier: number;
+  }>;
 
-  // Cache per-user settings so we only fetch once per user.
-  const settingsCache = new Map<string, Awaited<ReturnType<typeof getUserSettings>>>();
+  // Resolve our own origin. Use the request's forwarded-host where available
+  // (Vercel sets this); fall back to NEXT_PUBLIC_SITE_URL.
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const origin = forwardedHost
+    ? `https://${forwardedHost}`
+    : (process.env.NEXT_PUBLIC_SITE_URL ?? new URL(req.url).origin);
 
-  let ok = 0;
-  let failed = 0;
-  let pushed = 0;
-  for (const t of tickers) {
-    try {
-      const summary = await runThesisForSymbol({
-        symbol: t.symbol,
-        companyName: t.name,
-        userId: t.user_id,
-        supabase: admin,
+  const results = await Promise.allSettled(
+    tickers.map(async (t) => {
+      const res = await fetch(`${origin}/api/agent/cron-worker`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${process.env.CRON_SECRET}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: t.user_id,
+          symbol: t.symbol,
+          companyName: t.name,
+        }),
+        cache: "no-store",
       });
-      ok++;
+      const body = await res.json().catch(() => null);
+      return {
+        ok: res.ok,
+        symbol: t.symbol,
+        status: res.status,
+        ...(body ?? {}),
+      };
+    }),
+  );
 
-      // Trigger push when a thesis tips from intact/strengthened → weakened/broken.
-      if (
-        summary.statusChanged &&
-        (summary.output.status === "weakened" || summary.output.status === "broken")
-      ) {
-        let settings = settingsCache.get(t.user_id);
-        if (!settings) {
-          settings = await getUserSettings(admin, t.user_id);
-          settingsCache.set(t.user_id, settings);
-        }
-        if (settings.notifications.thesisStatusChanges) {
-          const res = await sendPushToUser(
-            t.user_id,
-            {
-              title: `${t.symbol} thesis ${summary.output.status}`,
-              body: summary.output.keyDevelopment || `Status moved ${summary.previousStatus ?? "?"} → ${summary.output.status}`,
-              url: `/ai-research?symbol=${encodeURIComponent(t.symbol)}`,
-              tag: `thesis-status-${t.symbol}`,
-              requireInteraction: summary.output.status === "broken",
-            },
-            admin,
-          );
-          if (res.sent > 0) pushed++;
-        }
-      }
-    } catch (err) {
-      console.error("cron run failed", t.symbol, err);
-      failed++;
-    }
-  }
+  const summaries = results.map((r) =>
+    r.status === "fulfilled"
+      ? r.value
+      : { ok: false, error: r.reason instanceof Error ? r.reason.message : String(r.reason) },
+  );
 
-  return NextResponse.json({ ok, failed, pushed, total: tickers.length });
+  const ok = summaries.filter((s) => (s as { ok?: boolean }).ok).length;
+  const failed = summaries.length - ok;
+  const pushed = summaries.filter((s) => (s as { pushed?: boolean }).pushed).length;
+
+  return NextResponse.json({ ok, failed, pushed, total: tickers.length, summaries });
 }
