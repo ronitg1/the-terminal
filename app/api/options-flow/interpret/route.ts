@@ -21,7 +21,7 @@ const BodySchema = z.object({
   expiry: z.string().optional(),       // optional expiry override
 });
 
-const SYSTEM = `You are an options strategist for a discretionary energy-transition fund PM. You see chain aggregates from Yahoo (front-of-book or earnings expiry). You do NOT see institutional unusual-activity tape, so treat volume/OI ratios as a noisy signal — calibrate confidence accordingly.
+const SYSTEM = `You are an options strategist for a discretionary investor. You see chain aggregates from Yahoo (front-of-book or earnings expiry). You do NOT see institutional unusual-activity tape, so treat volume/OI ratios as a noisy signal — calibrate confidence accordingly.
 
 Output JSON ONLY — no prose, no fences:
 {

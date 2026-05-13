@@ -24,40 +24,34 @@ export interface UserSettings {
   notifications: NotificationPrefs;
 }
 
+// Out-of-the-box defaults. These are illustrative starter examples — every field
+// is editable from the Settings tab. Replace with whatever fits your book.
 export const DEFAULT_SETTINGS: UserSettings = {
   peerGroups: [
     {
-      name: "Solar modules",
-      members: ["FSLR", "TE", "CSIQ", "JKS", "ENPH"],
-      affects: ["FSLR", "TE"],
+      name: "AI chips (example)",
+      members: ["NVDA", "AMD", "AVGO", "TSM"],
+      affects: ["NVDA"],
     },
     {
-      name: "Solar downstream / tracking",
-      members: ["ARRY", "NXT", "SHLS"],
-      affects: ["ARRY", "NXT", "SHLS"],
+      name: "Money-center banks (example)",
+      members: ["JPM", "BAC", "WFC", "C"],
+      affects: ["JPM"],
     },
     {
-      name: "EV charging",
-      members: ["CHPT", "EVGO", "BLNK"],
-      affects: ["CHPT"],
-    },
-    {
-      name: "Battery storage",
-      members: ["STEM", "FLUX"],
-      affects: ["FSLR", "TE"],
+      name: "Solar (example)",
+      members: ["FSLR", "ENPH", "SEDG"],
+      affects: ["FSLR"],
     },
   ],
   macroSearchTerms: [
-    "IRA tax credits",
-    "FEOC compliance",
-    "45X advanced manufacturing PTC",
-    "Section 201 solar tariffs",
-    "Treasury 45X guidance",
-    "solar manufacturing capacity",
-    "battery storage",
-    "EV charging",
-    "energy transition policy",
-    "interconnection queue",
+    // The macro column primarily uses Finnhub's general news feed. These extra
+    // search terms hit NewsAPI for sector- or policy-specific topics that the
+    // general feed may miss. Add/remove freely.
+    "Federal Reserve rate decision",
+    "China tariffs",
+    "AI infrastructure capex",
+    "CHIPS Act funding",
   ],
   megaCaps: ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "NVDA", "TSLA", "JPM", "GS", "BRK-B"],
   bookSizeUsd: 200_000,

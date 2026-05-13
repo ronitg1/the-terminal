@@ -17,7 +17,7 @@ const BodySchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 });
 
-const SYSTEM = `You are the assistant to a discretionary energy-transition fund PM. Extract structured items from the PM's free-form journal entry.
+const SYSTEM = `You are the assistant to a discretionary investor. Extract structured items from their free-form journal entry.
 
 Output JSON ONLY:
 {

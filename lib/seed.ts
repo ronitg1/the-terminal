@@ -1,3 +1,12 @@
+// Starter watchlist seeded on a user's first sign-in if their tickers table
+// is empty. EDIT THIS to whatever names you actually trade — the agent's
+// industry frames adapt automatically.
+//
+// Tier convention:
+//   1 = core positions (run thesis pipeline 1-2x/day, push on status flips)
+//   2 = active monitoring (manual runs, surface in calendar/peers)
+//   3 = sector context only (ETFs, benchmarks, peers)
+
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { TickerTier } from "@/lib/types/db";
 
@@ -7,14 +16,14 @@ interface Seed {
   tier: TickerTier;
 }
 
+// Default starter set spans multiple frames so the multi-agent pipeline
+// demonstrates its sector-awareness. Replace freely.
 export const SEED_TICKERS: readonly Seed[] = [
-  { symbol: "FSLR", name: "First Solar, Inc.", tier: 1 },
-  { symbol: "TE",   name: "T1 Energy Inc.",    tier: 1 },
-  { symbol: "NXT",  name: "Nextracker Inc.",   tier: 1 },
-  { symbol: "ARRY", name: "Array Technologies",tier: 2 },
-  { symbol: "CHPT", name: "ChargePoint Holdings", tier: 2 },
-  { symbol: "SHLS", name: "Shoals Technologies", tier: 2 },
-  { symbol: "ICLN", name: "iShares Global Clean Energy", tier: 3 },
+  { symbol: "NVDA", name: "NVIDIA",                       tier: 1 },
+  { symbol: "JPM",  name: "JPMorgan Chase",               tier: 1 },
+  { symbol: "FSLR", name: "First Solar",                  tier: 2 },
+  { symbol: "LLY",  name: "Eli Lilly",                    tier: 2 },
+  { symbol: "SPY",  name: "SPDR S&P 500 ETF",             tier: 3 },
 ] as const;
 
 export async function seedTickersIfEmpty(

@@ -16,7 +16,7 @@ const MIN_TRADES = 5;          // soft threshold — surfaced in the response, n
 const MAX_JOURNAL_ENTRIES = 60;
 const MAX_TRADES = 60;
 
-const SYSTEM = `You are an experienced trading coach reviewing a discretionary energy-transition fund PM's recent journal entries and AI-generated trade ideas they tracked. The PM trades equities, options spreads, and occasionally outright options.
+const SYSTEM = `You are an experienced trading coach reviewing a discretionary investor's recent journal entries and AI-generated trade ideas they tracked. The investor trades equities, options spreads, and occasionally outright options.
 
 Your job: surface PATTERNS, not one-off observations. You're looking for repeated habits — both productive ones to keep and counterproductive ones to fix.
 

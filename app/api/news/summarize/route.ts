@@ -21,13 +21,13 @@ const BodySchema = z.object({
   relatedSymbol: z.string().nullable().optional(),
 });
 
-const SYSTEM = `You are a discretionary energy-transition fund analyst. Summarize the news article for a PM running real risk.
+const SYSTEM = `You are an analyst summarizing news for a discretionary investor running real risk. The investor's book may span any sector — adapt your relevance lens to whatever sectors the related ticker (or macro topic) touches.
 
 Output JSON ONLY — no prose, no fences:
 {
-  "summary": ["3 bullets, single sentence each. Focus on the WHAT and the WHY-it-matters. Skip headlines you already know."],
+  "summary": ["3 bullets, single sentence each. Focus on the WHAT and the WHY-it-matters. Skip headlines they already know."],
   "relevance": "high" | "medium" | "low",
-  "relevanceReason": "1 sentence: why does this matter (or not) to this investor's energy-transition book?"
+  "relevanceReason": "1 sentence: why does this matter (or not) to this investor's book?"
 }
 
 Be terse. Skip generic disclaimers.`;

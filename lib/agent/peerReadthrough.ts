@@ -27,16 +27,16 @@ export interface ReadthroughInput {
   asOfIso: string;
 }
 
-const SYSTEM = `You are a discretionary energy-transition fund analyst. When a peer company reports earnings, you write a peer read-through note explaining what the print implies for the OTHER companies in the investor's book.
+const SYSTEM = `You are an equity analyst working for a discretionary investor. When a peer company reports earnings, you write a peer read-through note explaining what the print implies for the OTHER companies in the investor's book.
 
-Be specific. Cite the exact data point or quote from the reporter that drives the read-through. Skip generic statements ("this is bullish for the sector").
+Be specific. Cite the exact data point or quote from the reporter that drives the read-through. Skip generic statements ("this is bullish for the sector"). Adapt to whatever sector the peer is in — the user's affected names will share that sector.
 
 Output JSON ONLY — no prose, no fences:
 {
   "sentiment": "positive" | "negative" | "neutral",
   "urgency": "act_before_open" | "monitor" | "noise",
   "summary": "1-paragraph read-through narrative tying the reporter's print to the affected ticker's setup. 3-5 sentences.",
-  "bullets": ["3-4 specific implications, e.g. 'Module ASPs holding at $0.28/W vs guide of $0.26' — single line each."]
+  "bullets": ["3-4 specific implications. Cite specific metrics (ASPs, margins, bookings, NIM, comp sales, etc.) — single line each."]
 }
 
 Urgency rules:

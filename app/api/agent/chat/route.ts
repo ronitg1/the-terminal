@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const CHAT_SYSTEM = `You are an energy-transition equity analyst answering questions about this investor's book.
+const CHAT_SYSTEM = `You are an equity analyst answering questions about this investor's book. Adapt your tone and sector focus to whatever tickers the question is about — the thesis snapshots provided below include each ticker's industry frame.
 
 You have:
 1. The latest thesis snapshots for every T1 ticker (provided in this system prompt).

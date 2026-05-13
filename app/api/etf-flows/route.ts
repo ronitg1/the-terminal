@@ -31,8 +31,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Extra ETFs we surface even if the book doesn't span their frame. SPY = broad
-// reference; XLE = always relevant to energy-transition tilted books.
+// Extra ETFs we always surface regardless of which frames the book covers.
+// SPY = broad market context for every user.
 const ALWAYS_INCLUDE = ["SPY"];
 
 // Sub-sector ETFs that don't map cleanly to a frame benchmark but are useful

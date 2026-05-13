@@ -1,6 +1,9 @@
 // Hardcoded US macro event schedule used by the Earnings calendar overlay.
 // Sourced from Federal Reserve / BLS publishing schedules at build time.
-// Periodically refresh — every ~6 months — when the official schedules update.
+//
+// MAINTENANCE: update this once a year (or when the Fed publishes the next
+// year's FOMC dates). FOMC dates: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+// BLS economic releases:        https://www.bls.gov/schedule/news_release/
 
 export type MacroEventKind = "FOMC" | "CPI" | "PPI" | "JOBS" | "GDP";
 

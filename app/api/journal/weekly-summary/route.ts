@@ -14,14 +14,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const SYSTEM = `You are writing a Sunday-night portfolio recap for a discretionary energy-transition fund PM.
+const SYSTEM = `You are writing a Sunday-night portfolio recap for a discretionary investor.
 
-The recap covers: how your tickers performed last week, any thesis status changes the agent flagged, and what's coming up next week (earnings + macro).
+The recap covers: how their tickers performed last week, any thesis status changes the agent flagged, and what's coming up next week (earnings + macro).
 
 Output JSON ONLY:
 {
   "headline": "1-sentence punchy summary of the week",
-  "performance": "1 paragraph: which names outperformed, which lagged, vs ICLN if data given",
+  "performance": "1 paragraph: which names outperformed, which lagged, vs the benchmark if data given",
   "thesisChanges": "1 paragraph: any thesis status changes (intact/strengthened/weakened/broken) with the WHY",
   "upcoming": "1 paragraph: earnings + macro events in the next 7-10 days that matter for the book",
   "callToAction": "1-3 specific things to do or watch this week"

@@ -142,7 +142,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 1. You'll see the sign-in screen. Enter your email.
 2. Check your inbox for a magic link (subject: "Confirm Your Signup"). Click it.
-3. You're in. The app seeds a starter watchlist (energy-transition names) the first time.
+3. You're in. The app seeds a starter watchlist spanning a few sectors the first time so the multi-agent pipeline can demonstrate its sector-awareness. Replace with your real names from the Book tab.
 
 **To customize your starting basket**: edit `lib/seed.ts` BEFORE first sign-in, or just add/remove tickers via Book → Add ticker after you're in.
 
@@ -272,7 +272,7 @@ supabase/
   setup.sql               all migrations concatenated — paste once on fresh install
 ```
 
-The big-picture design notes (multi-agent pipeline, industry frames, JSON repair, budget cap, cron schedule) are in [HANDOFF.md](HANDOFF.md).
+The big-picture design notes (multi-agent pipeline, industry frames, JSON repair pass, monthly budget cap, cron schedule) live in inline comments at the top of each `lib/agent/*.ts` and `lib/llm.ts` / `lib/billing.ts` file.
 
 ---
 

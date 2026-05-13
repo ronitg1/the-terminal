@@ -22,7 +22,7 @@ export const FRAMES: Record<string, IndustryFrame> = {
     benchmarkSymbol: "ICLN",
     benchmarkLabel: "iShares Global Clean Energy",
     personaContext:
-      "an energy-transition specialist (solar manufacturing, battery storage, EV charging, grid). Your reader funds the desk's clean-energy book.",
+      "an energy-transition specialist (solar manufacturing, battery storage, EV charging, grid). Your reader has clean-energy exposure in their book.",
     policyThemes: [
       "IRA 45X advanced manufacturing PTC",
       "48E ITC and 6418 transferability",
