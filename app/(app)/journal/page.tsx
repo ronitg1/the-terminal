@@ -152,7 +152,7 @@ export default function JournalPage() {
   }
 
   return (
-    <div className="grid h-[calc(100vh-7rem)] grid-cols-1 gap-4 lg:grid-cols-[18rem_1fr_20rem]">
+    <div className="grid h-[calc(100vh-5rem)] grid-cols-1 gap-3 lg:grid-cols-[15rem_1fr_18rem]">
       {/* Left: calendar + recent entries + search */}
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
         <ErrorBoundary label="Calendar">
@@ -233,7 +233,7 @@ export default function JournalPage() {
                 scheduleSave({ content: e.target.value });
               }}
               placeholder="Write today's entry — trade plans, post-trade notes, thesis updates, macro observations, meeting notes. Markdown welcome. Hit AI organize when done."
-              className="flex-1 resize-none rounded-none border-0 font-mono text-xs leading-relaxed focus-visible:ring-0"
+              className="min-h-0 flex-1 resize-none rounded-none border-0 px-4 py-3 font-mono text-sm leading-relaxed focus-visible:ring-0"
             />
           </div>
         </ErrorBoundary>
