@@ -5,7 +5,15 @@ import { Mail, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export function WeeklyEmailControls() {
+interface EmailControlsProps {
+  /** API route relative to origin, e.g. "/api/email/weekly" or "/api/email/daily". */
+  apiPath: string;
+  /** Button copy. */
+  sendLabel?: string;
+  previewLabel?: string;
+}
+
+function EmailControls({ apiPath, sendLabel, previewLabel }: EmailControlsProps) {
   const [loading, setLoading] = useState<"send" | "preview" | null>(null);
   const [message, setMessage] = useState<{ text: string; tone: "info" | "error" | "success" } | null>(null);
 
@@ -13,7 +21,7 @@ export function WeeklyEmailControls() {
     setLoading("send");
     setMessage(null);
     try {
-      const res = await fetch("/api/email/weekly");
+      const res = await fetch(apiPath);
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
       if (j.skipped) {
@@ -32,7 +40,7 @@ export function WeeklyEmailControls() {
 
   function openPreview() {
     setLoading("preview");
-    window.open("/api/email/weekly?preview=1", "_blank");
+    window.open(`${apiPath}?preview=1`, "_blank");
     setLoading(null);
   }
 
@@ -41,10 +49,10 @@ export function WeeklyEmailControls() {
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={send} disabled={loading !== null}>
           <Mail className={cn("mr-1 h-3 w-3", loading === "send" && "animate-pulse")} />
-          {loading === "send" ? "Sending…" : "Send to my email now"}
+          {loading === "send" ? "Sending…" : sendLabel ?? "Send to my email now"}
         </Button>
         <Button size="sm" variant="outline" onClick={openPreview} disabled={loading !== null}>
-          <Eye className="mr-1 h-3 w-3" /> Preview HTML
+          <Eye className="mr-1 h-3 w-3" /> {previewLabel ?? "Preview HTML"}
         </Button>
       </div>
       {message && (
@@ -61,4 +69,12 @@ export function WeeklyEmailControls() {
       )}
     </div>
   );
+}
+
+export function WeeklyEmailControls() {
+  return <EmailControls apiPath="/api/email/weekly" />;
+}
+
+export function DailyEmailControls() {
+  return <EmailControls apiPath="/api/email/daily" sendLabel="Send today's brief now" />;
 }

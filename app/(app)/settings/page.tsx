@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { ErrorBoundary } from "@/components/shell/ErrorBoundary";
 import { PushRegistration } from "@/components/settings/PushRegistration";
-import { WeeklyEmailControls } from "@/components/settings/WeeklyEmailControls";
+import { WeeklyEmailControls, DailyEmailControls } from "@/components/settings/WeeklyEmailControls";
 import { cn, timeAgo } from "@/lib/utils";
 import type { UserSettings, PeerGroup } from "@/lib/settings";
 
@@ -137,6 +137,18 @@ export default function SettingsPage() {
           placeholder="e.g. AAPL"
           uppercase
         />
+      </ErrorBoundary>
+
+      <ErrorBoundary label="Daily brief">
+        <section className="space-y-2 rounded-md border bg-card p-4">
+          <SectionTitle>Daily market brief</SectionTitle>
+          <p className="text-xs text-muted-foreground">
+            Sent weekdays at 5:30pm ET (post-close) to your account email. Covers the day's index moves, your
+            book's performance, top headlines (live Tavily search), thesis flips today, and tomorrow's earnings
+            + macro calendar. Requires <code className="rounded bg-muted px-1 py-0.5">RESEND_API_KEY</code> + <code className="rounded bg-muted px-1 py-0.5">TAVILY_API_KEY</code>.
+          </p>
+          <DailyEmailControls />
+        </section>
       </ErrorBoundary>
 
       <ErrorBoundary label="Weekly email">
