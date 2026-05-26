@@ -185,14 +185,27 @@ export interface DailyMover {
   reason: string;
 }
 
+export interface DailyHeadline {
+  topic: string;       // category tag e.g. "FED" / "EARNINGS" / "CHINA"
+  headline: string;    // 1-sentence story
+  tickers: string[];   // related symbols (optional)
+}
+
 export interface DailyBriefBlock {
   date: string;
   market_tone: MarketTone;
   synopsis: string;
+  top_headlines: DailyHeadline[];
   notable_gainers: DailyMover[];
   notable_decliners: DailyMover[];
   calendar_ahead: string;
   frame_watch: string;
+}
+
+export interface DailySourceLink {
+  title: string;
+  url: string;
+  source: string | null;
 }
 
 export interface DailyEmailData {
@@ -208,6 +221,7 @@ export interface DailyEmailData {
   flips: Array<{ symbol: string; from: string; to: string; at: string }>;
   upcomingEarnings: Array<{ symbol: string; date: string; timing: "BH" | "AH" | null }>;
   macroTomorrow: Array<{ date: string; label: string }>;
+  sourceLinks: DailySourceLink[];
 }
 
 const TONE_COLORS: Record<MarketTone, { fg: string; bg: string }> = {
@@ -234,8 +248,33 @@ function fmtLevel(v: number | null | undefined, prefix = ""): string {
 }
 
 export function buildDailyEmailHtml(d: DailyEmailData): string {
-  const { brief, indexRows, macroTiles, sectorRows, bookMoves, flips, upcomingEarnings, macroTomorrow, appUrl, dateLabel, frameLabel } = d;
+  const { brief, indexRows, macroTiles, sectorRows, bookMoves, flips, upcomingEarnings, macroTomorrow, appUrl, dateLabel, frameLabel, sourceLinks } = d;
   const tone = TONE_COLORS[brief.market_tone] ?? TONE_COLORS.Mixed;
+
+  // Top headlines — 4-6 bullets with topic chip + tickers + headline text.
+  const headlinesHtml = brief.top_headlines.length === 0 ? "" : `<ul style="margin:0;padding:0;list-style:none">${brief.top_headlines
+    .map((h) => {
+      const tickerChips = h.tickers.length
+        ? h.tickers
+            .map(
+              (t) =>
+                `<span style="display:inline-block;padding:1px 5px;border:1px solid ${BORDER};border-radius:3px;font-size:10px;color:${ACCENT};margin-left:6px;font-family:'Menlo','SF Mono',monospace">${escapeHtml(t)}</span>`,
+            )
+            .join("")
+        : "";
+      return `<li style="margin:0 0 10px 0;padding:0;display:block;font-size:13.5px;line-height:1.55;color:${FG}">
+        <span style="display:inline-block;padding:2px 6px;background:${ACCENT};color:#fff;border-radius:3px;font-size:9px;font-weight:700;letter-spacing:1px;margin-right:8px;vertical-align:1px">${escapeHtml(h.topic || "NEWS")}</span>${escapeHtml(h.headline)}${tickerChips}
+      </li>`;
+    })
+    .join("")}</ul>`;
+
+  // Source links (clickable Tavily articles) — small footer-style list.
+  const sourceLinksHtml = sourceLinks.length === 0 ? "" : `<ul style="margin:8px 0 0;padding-left:18px;font-size:11px;line-height:1.6;color:${MUTED}">${sourceLinks
+    .map(
+      (s) =>
+        `<li><a href="${s.url}" style="color:${ACCENT};text-decoration:none">${escapeHtml(s.title)}</a>${s.source ? `<span style="color:${MUTED}"> · ${escapeHtml(s.source)}</span>` : ""}</li>`,
+    )
+    .join("")}</ul>`;
 
   // Index table — Day / MTD / YTD columns.
   const indexTable = indexRows
@@ -339,6 +378,12 @@ export function buildDailyEmailHtml(d: DailyEmailData): string {
       <div style="font-size:13.5px;line-height:1.75;color:${FG}">${escapeHtml(brief.synopsis)}</div>
     </td></tr>
 
+    ${headlinesHtml ? `<!-- TOP HEADLINES -->
+    <tr><td style="padding:18px 24px;border-bottom:1px solid ${BORDER}">
+      <div style="font-size:10px;font-weight:700;color:${MUTED};letter-spacing:2px;text-transform:uppercase;margin-bottom:12px">📰 Top Headlines</div>
+      ${headlinesHtml}
+    </td></tr>` : ""}
+
     <!-- INDEX TABLE -->
     <tr><td style="padding:18px 24px;border-bottom:1px solid ${BORDER}">
       <div style="font-size:10px;font-weight:700;color:${MUTED};letter-spacing:2px;text-transform:uppercase;margin-bottom:12px">Index Performance</div>
@@ -410,6 +455,12 @@ export function buildDailyEmailHtml(d: DailyEmailData): string {
       ${calendarList}
     </td></tr>
 
+    ${sourceLinksHtml ? `<!-- SOURCES -->
+    <tr><td style="padding:14px 24px;border-bottom:1px solid ${BORDER}">
+      <div style="font-size:10px;font-weight:700;color:${MUTED};letter-spacing:2px;text-transform:uppercase">Sources</div>
+      ${sourceLinksHtml}
+    </td></tr>` : ""}
+
     <!-- CTA -->
     <tr><td style="padding:18px 24px 24px;text-align:center;background:#0e1b2a">
       <a href="${appUrl}" style="display:inline-block;padding:10px 18px;background:${ACCENT};color:#fff;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">Open The Terminal</a>
@@ -433,6 +484,15 @@ export function buildDailyEmailText(d: DailyEmailData): string {
   lines.push("SYNOPSIS");
   lines.push(d.brief.synopsis);
   lines.push("");
+
+  if (d.brief.top_headlines.length) {
+    lines.push("TOP HEADLINES");
+    for (const h of d.brief.top_headlines) {
+      const tickers = h.tickers.length ? ` [${h.tickers.join(",")}]` : "";
+      lines.push(`  ${h.topic}: ${h.headline}${tickers}`);
+    }
+    lines.push("");
+  }
 
   lines.push("INDEX PERFORMANCE");
   for (const r of d.indexRows) {
@@ -486,6 +546,12 @@ export function buildDailyEmailText(d: DailyEmailData): string {
   for (const e of d.upcomingEarnings) lines.push(`  ${e.symbol} earnings on ${e.date}${e.timing ? ` (${e.timing})` : ""}`);
   for (const m of d.macroTomorrow) lines.push(`  ${m.label} — ${m.date}`);
   lines.push("");
+
+  if (d.sourceLinks.length) {
+    lines.push("SOURCES");
+    for (const s of d.sourceLinks) lines.push(`  ${s.title} — ${s.url}`);
+    lines.push("");
+  }
 
   lines.push(`Open: ${d.appUrl}`);
   return lines.join("\n");

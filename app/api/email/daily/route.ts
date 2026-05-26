@@ -91,6 +91,12 @@ Schema:
   "date": "e.g. Tuesday, May 27 2026",
   "market_tone": "Bullish" | "Bearish" | "Mixed" | "Risk-Off" | "Risk-On",
   "synopsis": "3-5 sentence narrative covering tone, drivers, and key risks",
+  "top_headlines": [
+    { "topic": "1-3 word category, e.g. FED, EARNINGS, CHINA, OIL, TECH",
+      "headline": "one declarative sentence with specific tickers / numbers / officials",
+      "tickers": ["optional list of related tickers"]
+    }
+  ],
   "notable_gainers": [
     { "ticker": "...", "name": "...", "pct": "+X.X%", "reason": "one concise sentence" }
   ],
@@ -102,6 +108,7 @@ Schema:
 }
 
 Rules:
+- top_headlines: 4-6 items covering the day's most important stories. Each is a single declarative sentence — no preamble. Include tickers where relevant.
 - 3-5 gainers, 3-5 decliners. Each MUST include a real ticker.
 - pct values must come from the snapshot data or the Tavily results — do not invent.
 - Skip generic advice like "investors should monitor". Every sentence must add information.`;
@@ -443,11 +450,32 @@ async function buildDailyDataForUser(
     date?: string;
     market_tone?: string;
     synopsis?: string;
+    top_headlines?: Array<{ topic?: string; headline?: string; tickers?: string[] }>;
     notable_gainers?: Array<{ ticker?: string; name?: string; pct?: string; reason?: string }>;
     notable_decliners?: Array<{ ticker?: string; name?: string; pct?: string; reason?: string }>;
     calendar_ahead?: string;
     frame_watch?: string;
   }>(completion.text);
+
+  // Collect a deduped list of Tavily source links to surface under the
+  // headlines block. We take the top result from each query (up to 8 total).
+  const sourceLinks: Array<{ title: string; url: string; source: string | null }> = [];
+  const seenUrls = new Set<string>();
+  for (const r of tavilyResults) {
+    for (const item of r.results.slice(0, 2)) {
+      if (!item.url || seenUrls.has(item.url)) continue;
+      seenUrls.add(item.url);
+      let host: string | null = null;
+      try {
+        host = new URL(item.url).hostname.replace(/^www\./, "");
+      } catch {
+        host = null;
+      }
+      sourceLinks.push({ title: item.title, url: item.url, source: host });
+      if (sourceLinks.length >= 8) break;
+    }
+    if (sourceLinks.length >= 8) break;
+  }
 
   const appUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://localhost:3000";
 
@@ -456,10 +484,19 @@ async function buildDailyDataForUser(
     dateLabel,
     appUrl,
     frameLabel: dominantFrame.label,
+    sourceLinks,
     brief: {
       date: String(raw.date ?? dateLabel),
       market_tone: normalizeTone(raw.market_tone),
       synopsis: String(raw.synopsis ?? "").trim(),
+      top_headlines: (raw.top_headlines ?? [])
+        .filter((x) => x && (x.topic || x.headline))
+        .slice(0, 8)
+        .map((x) => ({
+          topic: String(x.topic ?? "").trim().toUpperCase(),
+          headline: String(x.headline ?? "").trim(),
+          tickers: Array.isArray(x.tickers) ? x.tickers.map((t) => String(t).toUpperCase()).filter(Boolean).slice(0, 4) : [],
+        })),
       notable_gainers: (raw.notable_gainers ?? [])
         .filter((x) => x && typeof x.ticker === "string")
         .slice(0, 6)
