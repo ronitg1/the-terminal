@@ -1,18 +1,15 @@
-// Daily 5:30pm ET market brief. Three modes (same shape as /api/email/weekly):
+// Daily 5:30pm ET market brief. Three modes:
 //
 //   GET  /api/email/daily                — sends to YOUR account email (logged-in user)
 //   GET  /api/email/daily?preview=1      — returns HTML for in-browser preview
 //   GET  /api/email/daily                + Authorization: Bearer CRON_SECRET
 //                                        — cron entry point, fans out to all users
 //
-// The brief covers:
-//   - Market summary (SPY/QQQ/IWM + your dominant sector ETF + VIX)
-//   - Your book's day moves
-//   - Today's earnings reactions (from book + mega caps that reported)
-//   - Top headlines via Tavily live search
-//   - Thesis status changes detected today
-//   - Tomorrow's calendar (earnings + macro)
-//   - AI synthesis: "what mattered today, what to watch tomorrow"
+// Brief structure mirrors the original Python script (market_brief.py) — index
+// table with MTD/YTD, macro tiles (VIX/DXY/WTI/Gold/BTC + yields), sector ETF
+// performance, gainer/decliner cards with reasons, frame-watch section (using
+// the user's dominant industry frame), calendar ahead, AI synopsis + market
+// tone tag.
 
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerSupabase } from "@/lib/supabase/server";
@@ -22,9 +19,9 @@ import { llmComplete } from "@/lib/llm";
 import { parseLenientJson } from "@/lib/agent/jsonRepair";
 import { getQuotesProvider } from "@/lib/providers/quotes";
 import { getNextEarningsBatch } from "@/lib/providers/earnings-calendar";
-import { tavilySearch } from "@/lib/providers/tavily";
+import { tavilySearch, type TavilySearchResponse } from "@/lib/providers/tavily";
 import { getUserSettings } from "@/lib/settings";
-import { getFrameById, pickFrame, FRAMES } from "@/lib/agent/industryFrames";
+import { getFrameById, pickFrame, FRAMES, type IndustryFrame } from "@/lib/agent/industryFrames";
 import { getMacroInRange, type MacroEvent } from "@/lib/macro-calendar";
 import { sendEmail, isEmailConfigured } from "@/lib/email";
 import { buildDailyEmailHtml, buildDailyEmailText, type DailyEmailData } from "@/lib/email-templates";
@@ -34,63 +31,95 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const SYSTEM = `You are writing a 5:30pm ET market brief for a discretionary investor. The brief lands in their inbox right after the close — terse, opinionated, PM-voiced. Skip filler ("markets traded sideways"); tell them what actually mattered.
+// ---------------------------------------------------------------------------
+// Symbols
+// ---------------------------------------------------------------------------
 
-Output JSON ONLY:
+const INDEX_SYMBOLS = ["SPY", "QQQ", "IWM", "DIA"] as const;
+const INDEX_LABELS: Record<string, { name: string; mtdYtdKey: "sp500" | "nasdaq" | "russell" | "dow" }> = {
+  SPY: { name: "S&P 500", mtdYtdKey: "sp500" },
+  QQQ: { name: "Nasdaq 100", mtdYtdKey: "nasdaq" },
+  IWM: { name: "Russell 2K", mtdYtdKey: "russell" },
+  DIA: { name: "Dow Jones", mtdYtdKey: "dow" },
+};
+
+const MACRO_SYMBOLS = ["^VIX", "DX-Y.NYB", "CL=F", "GC=F", "BTC-USD", "^FVX", "^TNX", "^TYX"];
+const MACRO_LABELS: Record<string, string> = {
+  "^VIX": "VIX",
+  "DX-Y.NYB": "DXY",
+  "CL=F": "WTI Crude",
+  "GC=F": "Gold",
+  "BTC-USD": "Bitcoin",
+  "^FVX": "5Y Yield",
+  "^TNX": "10Y Yield",
+  "^TYX": "30Y Yield",
+};
+
+const SECTOR_ETFS = ["XLK", "XLF", "XLE", "XLV", "XLI", "XLU", "XLY", "XLP", "XLB", "XLRE", "XLC"];
+const SECTOR_NAMES: Record<string, string> = {
+  XLK: "Technology",
+  XLF: "Financials",
+  XLE: "Energy",
+  XLV: "Healthcare",
+  XLI: "Industrials",
+  XLU: "Utilities",
+  XLY: "Consumer Disc",
+  XLP: "Consumer Staples",
+  XLB: "Materials",
+  XLRE: "Real Estate",
+  XLC: "Comms",
+};
+
+const TAVILY_QUERIES = [
+  "US stock market close today S&P 500 Nasdaq Russell Dow performance",
+  "top stock gainers decliners today earnings upgrades analyst news",
+  "S&P 500 sector ETF performance today XLK XLF XLE XLV XLI XLU",
+  "Treasury yields DXY dollar WTI crude gold Bitcoin today market",
+  // Frame-specific query is added dynamically (see buildDailyDataForUser).
+];
+
+// ---------------------------------------------------------------------------
+// Prompt
+// ---------------------------------------------------------------------------
+
+const SYSTEM = `You are a sell-side equity research associate producing a daily US equity market brief for a discretionary investor. Adapt the "frame_watch" section to the investor's dominant industry frame (will be specified in the user message).
+
+You receive (a) snapshot quotes for indices, sectors, and macro instruments and (b) live web search results from Tavily. Synthesize into JSON. Be concise, precise, data-driven. NEVER fabricate numbers — use "N/A" if unavailable. Return ONLY valid JSON, no markdown fences.
+
+Schema:
 {
-  "headline": "1-sentence punchy summary of the day. The single most important takeaway.",
-  "marketAction": "1 paragraph: what moved and WHY. Cite specific index moves and the driver — Fed comments, data print, sector rotation, mega-cap headline. 3-4 sentences max.",
-  "bookSummary": "1 paragraph: how the user's specific book performed today. Name winners and losers with % moves. Skip if the book is empty.",
-  "topHeadlines": ["2-4 bullets of the day's most important headlines. Each starts with the topic. Cite specific tickers / officials / numbers."],
-  "tomorrow": "1 short paragraph: what's on the calendar tomorrow (earnings + macro events) and what the PM should be watching.",
-  "watch": ["1-3 specific things to watch tomorrow — concrete, not vague. e.g. 'NVDA pre-market reaction to Trump China tariff' not 'monitor tech sector'."]
+  "date": "e.g. Tuesday, May 27 2026",
+  "market_tone": "Bullish" | "Bearish" | "Mixed" | "Risk-Off" | "Risk-On",
+  "synopsis": "3-5 sentence narrative covering tone, drivers, and key risks",
+  "notable_gainers": [
+    { "ticker": "...", "name": "...", "pct": "+X.X%", "reason": "one concise sentence" }
+  ],
+  "notable_decliners": [
+    { "ticker": "...", "name": "...", "pct": "-X.X%", "reason": "one concise sentence" }
+  ],
+  "calendar_ahead": "Upcoming macro events / Fed speakers / auctions in the next 1-2 days (concrete, no fluff)",
+  "frame_watch": "Headlines and themes relevant to the investor's dominant industry frame (will be named in the prompt). N/A if nothing material."
 }
 
 Rules:
-- Be terse. PM doesn't want a recap of every move; they want signal.
-- No hedging language. No "investors should consider".
-- Cite specific tickers, %s, and dollar levels.
-- The bookSummary is optional — if there's no book or no moves worth noting, return an empty string.`;
+- 3-5 gainers, 3-5 decliners. Each MUST include a real ticker.
+- pct values must come from the snapshot data or the Tavily results — do not invent.
+- Skip generic advice like "investors should monitor". Every sentence must add information.`;
 
-interface MarketSnapshot {
-  symbol: string;
-  label: string;
-  price: number | null;
-  changePct: number | null;
-}
-
-interface BookMove {
-  symbol: string;
-  tier: number | null;
-  changePct: number | null;
-  price: number | null;
-}
-
-interface ThesisFlip {
-  symbol: string;
-  from: string;
-  to: string;
-  at: string;
-}
-
-interface UpcomingEarnings {
-  symbol: string;
-  date: string;
-  timing: "BH" | "AH" | null;
-}
+// ---------------------------------------------------------------------------
+// Pipeline entry points
+// ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const preview = url.searchParams.get("preview") === "1";
 
-  // Cron entry point.
   const authHeader = req.headers.get("authorization");
   const cronExpected = process.env.CRON_SECRET ? `Bearer ${process.env.CRON_SECRET}` : null;
   if (cronExpected && authHeader === cronExpected) {
     return runCronForAllUsers();
   }
 
-  // Logged-in user mode.
   const supabase = createServerSupabase();
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) return new NextResponse("Unauthorized", { status: 401 });
@@ -112,7 +141,7 @@ export async function GET(req: NextRequest) {
     const text = buildDailyEmailText(data);
     const res = await sendEmail({
       to: email,
-      subject: `Market brief — ${data.date}`,
+      subject: `📊 Market Brief · ${data.dateLabel} · ${data.brief.market_tone}`,
       html,
       text,
     });
@@ -152,7 +181,7 @@ async function runCronForAllUsers(): Promise<NextResponse> {
       const text = buildDailyEmailText(data);
       const res = await sendEmail({
         to: email,
-        subject: `Market brief — ${data.date}`,
+        subject: `📊 Market Brief · ${data.dateLabel} · ${data.brief.market_tone}`,
         html,
         text,
       });
@@ -165,6 +194,10 @@ async function runCronForAllUsers(): Promise<NextResponse> {
   }
   return NextResponse.json({ ok: true, sent, failed, skipped, total: userIds.length });
 }
+
+// ---------------------------------------------------------------------------
+// Core pipeline
+// ---------------------------------------------------------------------------
 
 async function buildDailyDataForUser(
   supabase: SupabaseClient,
@@ -188,8 +221,9 @@ async function buildDailyDataForUser(
   const settings = await getUserSettings(supabase, userId);
   void settings;
 
-  // 1. Resolve the user's dominant frame for sector ETF context.
-  let dominantFrame = FRAMES.generalist;
+  // 1. Dominant frame — used to label the "frame watch" section + craft a
+  //    sector-specific Tavily query.
+  let dominantFrame: IndustryFrame = FRAMES.generalist;
   if (tickers.length > 0) {
     const counts = new Map<string, number>();
     for (const t of tickers) {
@@ -206,50 +240,97 @@ async function buildDailyDataForUser(
     }
     dominantFrame = FRAMES[best] ?? FRAMES.generalist;
   }
+  const frameQuery =
+    dominantFrame.id === "generalist"
+      ? "broad market themes mega cap stocks today"
+      : `${dominantFrame.label} sector news ${dominantFrame.policyThemes.slice(0, 3).join(" ")} today`;
 
-  // 2. Pull intraday market snapshot — SPY/QQQ/IWM + dominant sector ETF + VIX.
-  const marketSymbols = ["SPY", "QQQ", "IWM", "^VIX"];
-  if (!marketSymbols.includes(dominantFrame.benchmarkSymbol)) {
-    marketSymbols.push(dominantFrame.benchmarkSymbol);
-  }
-  const allSyms = Array.from(new Set([...marketSymbols, ...tickers.map((t) => t.symbol)]));
-  const quotes = await getQuotesProvider().batchQuotes(allSyms);
+  // 2. Parallel data fetches.
+  const provider = getQuotesProvider();
+  const allQuoteSymbols = [...INDEX_SYMBOLS, ...MACRO_SYMBOLS, ...SECTOR_ETFS, ...tickers.map((t) => t.symbol)];
+
+  const [
+    quotes,
+    spHistory,
+    qqqHistory,
+    iwmHistory,
+    diaHistory,
+    tavilyResults,
+  ] = await Promise.all([
+    provider.batchQuotes(Array.from(new Set(allQuoteSymbols))),
+    provider.history("SPY", "1y"),
+    provider.history("QQQ", "1y"),
+    provider.history("IWM", "1y"),
+    provider.history("DIA", "1y"),
+    Promise.all(
+      [...TAVILY_QUERIES, frameQuery].map(async (q) => {
+        try {
+          return await tavilySearch(q, { maxResults: 5, topic: "news" });
+        } catch (err) {
+          console.warn("Tavily query failed", q, err);
+          return { query: q, answer: null, results: [] } as TavilySearchResponse;
+        }
+      }),
+    ),
+  ]);
+
   const quoteBySym = new Map(quotes.map((q) => [q.symbol, q]));
 
-  const marketSnapshot: MarketSnapshot[] = marketSymbols.map((sym) => {
+  // 3. Index table — day + MTD + YTD.
+  const indexRows = INDEX_SYMBOLS.map((sym) => {
     const q = quoteBySym.get(sym);
+    const hist =
+      sym === "SPY" ? spHistory :
+      sym === "QQQ" ? qqqHistory :
+      sym === "IWM" ? iwmHistory :
+      diaHistory;
     return {
-      symbol: sym === "^VIX" ? "VIX" : sym,
-      label:
-        sym === "SPY"
-          ? "S&P 500"
-          : sym === "QQQ"
-          ? "Nasdaq 100"
-          : sym === "IWM"
-          ? "Russell 2000"
-          : sym === "^VIX"
-          ? "VIX"
-          : sym === dominantFrame.benchmarkSymbol
-          ? dominantFrame.benchmarkLabel
-          : sym,
-      price: q?.price ?? null,
-      changePct: q?.changePct ?? null,
+      symbol: sym,
+      name: INDEX_LABELS[sym].name,
+      level: q?.price ?? null,
+      dayChgPct: q?.changePct ?? null,
+      mtdPct: computeMtdReturn(hist),
+      ytdPct: computeYtdReturn(hist),
     };
   });
 
-  const bookMoves: BookMove[] = tickers
+  // 4. Macro tiles.
+  const macroTiles = MACRO_SYMBOLS.map((sym) => {
+    const q = quoteBySym.get(sym);
+    return {
+      symbol: sym,
+      label: MACRO_LABELS[sym] ?? sym,
+      value: q?.price ?? null,
+      changePct: q?.changePct ?? null,
+      isYield: sym.startsWith("^") && sym !== "^VIX",
+    };
+  });
+
+  // 5. Sector ETFs.
+  const sectorRows = SECTOR_ETFS.map((sym) => {
+    const q = quoteBySym.get(sym);
+    return {
+      symbol: sym,
+      name: SECTOR_NAMES[sym] ?? sym,
+      changePct: q?.changePct ?? null,
+    };
+  }).sort((a, b) => (b.changePct ?? -999) - (a.changePct ?? -999));
+
+  // 6. User's book performance today.
+  const bookMoves = tickers
     .map((t) => {
       const q = quoteBySym.get(t.symbol);
       return {
         symbol: t.symbol,
+        name: t.name,
         tier: t.tier,
-        changePct: q?.changePct ?? null,
         price: q?.price ?? null,
+        changePct: q?.changePct ?? null,
       };
     })
     .sort((a, b) => Math.abs(b.changePct ?? 0) - Math.abs(a.changePct ?? 0));
 
-  // 3. Thesis flips today.
+  // 7. Thesis flips today.
   const startOfDayIso = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00Z").toISOString();
   const { data: thesisRows } = await supabase
     .from("thesis_snapshots")
@@ -259,7 +340,7 @@ async function buildDailyDataForUser(
     .order("generated_at", { ascending: true });
   type ThesisRow = { symbol: string; status: string; generated_at: string };
   const theses = (thesisRows ?? []) as ThesisRow[];
-  const flips: ThesisFlip[] = [];
+  const flips: Array<{ symbol: string; from: string; to: string; at: string }> = [];
   const lastStatus = new Map<string, string>();
   for (const t of theses) {
     const prev = lastStatus.get(t.symbol);
@@ -269,49 +350,88 @@ async function buildDailyDataForUser(
     lastStatus.set(t.symbol, t.status);
   }
 
-  // 4. Upcoming earnings tomorrow + day after.
+  // 8. Upcoming earnings + macro events (next 2 days).
   const tomorrow = new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 10);
   const dayAfter = new Date(Date.now() + 48 * 3600_000).toISOString().slice(0, 10);
   const upcoming = tickers.length > 0 ? await getNextEarningsBatch(tickers.map((t) => t.symbol)) : [];
-  const upcomingEarnings: UpcomingEarnings[] = upcoming
+  const upcomingEarnings = upcoming
     .filter((e) => e.earningsDate === tomorrow || e.earningsDate === dayAfter)
     .map((e) => ({ symbol: e.symbol, date: e.earningsDate!, timing: e.timing }));
-
-  // 5. Macro events tomorrow.
   const macroTomorrow: MacroEvent[] = getMacroInRange(tomorrow, dayAfter);
 
-  // 6. Tavily live search — what mattered in markets today.
-  let liveAnswer: string | null = null;
-  let liveHeadlines: Array<{ title: string; url: string; content: string }> = [];
-  try {
-    const t = await tavilySearch(
-      "US stock market today, what moved and why, Fed, macro, top stocks",
-      { maxResults: 6, topic: "news" },
-    );
-    liveAnswer = t.answer;
-    liveHeadlines = t.results.slice(0, 6).map((r) => ({ title: r.title, url: r.url, content: r.content }));
-  } catch (err) {
-    console.warn("Tavily daily search failed", err);
-  }
+  // 9. Build the Tavily context block for the LLM.
+  const tavilyContext = tavilyResults
+    .map((r, i) => {
+      const summary = r.answer ? `SUMMARY: ${r.answer}` : "";
+      const items = r.results
+        .slice(0, 5)
+        .map((x) => `- [${x.title}] ${x.content.slice(0, 280)}`)
+        .join("\n");
+      return `=== QUERY ${i + 1}: ${r.query} ===\n${summary}\n${items}`;
+    })
+    .join("\n\n");
 
-  // 7. LLM synthesis.
+  // 10. LLM synopsis.
   await ensureBudget(supabase, userId);
-  const userPrompt = buildDailyPrompt({
-    marketSnapshot,
-    bookMoves,
-    flips,
-    upcomingEarnings,
-    macroTomorrow,
-    liveAnswer,
-    liveHeadlines,
-    tickerNames: new Map(tickers.map((t) => [t.symbol, t.name])),
+  const promptLines: string[] = [];
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
   });
+  promptLines.push(`TODAY: ${dateLabel}`);
+  promptLines.push(`DOMINANT FRAME (for frame_watch section): ${dominantFrame.label}`);
+  if (dominantFrame.policyThemes.length > 0) {
+    promptLines.push(`FRAME POLICY THEMES: ${dominantFrame.policyThemes.slice(0, 4).join(", ")}`);
+  }
+  promptLines.push("");
+  promptLines.push("INDEX SNAPSHOT (close):");
+  for (const row of indexRows) {
+    promptLines.push(
+      `  ${row.name} (${row.symbol}): $${row.level?.toFixed(2) ?? "?"} | day ${fmtPct(row.dayChgPct)} | MTD ${fmtPct(row.mtdPct)} | YTD ${fmtPct(row.ytdPct)}`,
+    );
+  }
+  promptLines.push("");
+  promptLines.push("MACRO:");
+  for (const m of macroTiles) {
+    promptLines.push(`  ${m.label}: ${m.value != null ? m.value.toFixed(2) : "n/a"} (day ${fmtPct(m.changePct)})`);
+  }
+  promptLines.push("");
+  promptLines.push("SECTOR ETFs (sorted):");
+  for (const s of sectorRows) {
+    promptLines.push(`  ${s.name} (${s.symbol}): ${fmtPct(s.changePct)}`);
+  }
+  if (bookMoves.length > 0) {
+    promptLines.push("");
+    promptLines.push("USER'S BOOK (relevant context for synopsis):");
+    for (const b of bookMoves.slice(0, 10)) {
+      promptLines.push(`  T${b.tier ?? "?"} ${b.symbol}: ${fmtPct(b.changePct)}`);
+    }
+  }
+  if (flips.length > 0) {
+    promptLines.push("");
+    promptLines.push("USER'S THESIS FLIPS TODAY:");
+    for (const f of flips) promptLines.push(`  ${f.symbol}: ${f.from} → ${f.to}`);
+  }
+  if (upcomingEarnings.length || macroTomorrow.length) {
+    promptLines.push("");
+    promptLines.push("CALENDAR NEXT 2 DAYS:");
+    for (const e of upcomingEarnings) promptLines.push(`  ${e.symbol} earnings ${e.date}${e.timing ? ` (${e.timing})` : ""}`);
+    for (const m of macroTomorrow) promptLines.push(`  ${m.label} on ${m.date}`);
+  }
+  promptLines.push("");
+  promptLines.push("LIVE WEB CONTEXT (Tavily, 5 queries):");
+  promptLines.push(tavilyContext);
+  promptLines.push("");
+  promptLines.push(`Produce the JSON brief now. The frame_watch section must be specific to "${dominantFrame.label}" — write "N/A" if nothing material today.`);
 
   const completion = await llmComplete({
     purpose: "thesis",
     system: SYSTEM,
-    user: userPrompt,
-    maxTokens: 1500,
+    user: promptLines.join("\n"),
+    maxTokens: 2500,
     jsonResponse: true,
   });
   await recordUsage(
@@ -319,107 +439,110 @@ async function buildDailyDataForUser(
     supabase,
   );
 
-  const parsed = parseLenientJson<{
-    headline?: string;
-    marketAction?: string;
-    bookSummary?: string;
-    topHeadlines?: string[];
-    tomorrow?: string;
-    watch?: string[];
+  const raw = parseLenientJson<{
+    date?: string;
+    market_tone?: string;
+    synopsis?: string;
+    notable_gainers?: Array<{ ticker?: string; name?: string; pct?: string; reason?: string }>;
+    notable_decliners?: Array<{ ticker?: string; name?: string; pct?: string; reason?: string }>;
+    calendar_ahead?: string;
+    frame_watch?: string;
   }>(completion.text);
 
-  const dateIso = new Date().toISOString().slice(0, 10);
   const appUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://localhost:3000";
 
   return {
-    date: dateIso,
+    date: now.toISOString().slice(0, 10),
+    dateLabel,
     appUrl,
+    frameLabel: dominantFrame.label,
     brief: {
-      headline: String(parsed.headline ?? "").trim(),
-      marketAction: String(parsed.marketAction ?? "").trim(),
-      bookSummary: String(parsed.bookSummary ?? "").trim(),
-      topHeadlines: Array.isArray(parsed.topHeadlines) ? parsed.topHeadlines.map(String).filter(Boolean) : [],
-      tomorrow: String(parsed.tomorrow ?? "").trim(),
-      watch: Array.isArray(parsed.watch) ? parsed.watch.map(String).filter(Boolean) : [],
+      date: String(raw.date ?? dateLabel),
+      market_tone: normalizeTone(raw.market_tone),
+      synopsis: String(raw.synopsis ?? "").trim(),
+      notable_gainers: (raw.notable_gainers ?? [])
+        .filter((x) => x && typeof x.ticker === "string")
+        .slice(0, 6)
+        .map((x) => ({
+          ticker: String(x.ticker).toUpperCase(),
+          name: String(x.name ?? "").trim(),
+          pct: String(x.pct ?? "").trim(),
+          reason: String(x.reason ?? "").trim(),
+        })),
+      notable_decliners: (raw.notable_decliners ?? [])
+        .filter((x) => x && typeof x.ticker === "string")
+        .slice(0, 6)
+        .map((x) => ({
+          ticker: String(x.ticker).toUpperCase(),
+          name: String(x.name ?? "").trim(),
+          pct: String(x.pct ?? "").trim(),
+          reason: String(x.reason ?? "").trim(),
+        })),
+      calendar_ahead: String(raw.calendar_ahead ?? "").trim(),
+      frame_watch: String(raw.frame_watch ?? "").trim(),
     },
-    marketSnapshot,
+    indexRows,
+    macroTiles,
+    sectorRows,
     bookMoves: bookMoves.slice(0, 12),
     flips,
     upcomingEarnings,
     macroTomorrow,
-    liveHeadlines: liveHeadlines.slice(0, 5).map((h) => ({ title: h.title, url: h.url })),
   };
 }
 
-function buildDailyPrompt(args: {
-  marketSnapshot: MarketSnapshot[];
-  bookMoves: BookMove[];
-  flips: ThesisFlip[];
-  upcomingEarnings: UpcomingEarnings[];
-  macroTomorrow: MacroEvent[];
-  liveAnswer: string | null;
-  liveHeadlines: Array<{ title: string; content: string }>;
-  tickerNames: Map<string, string | null>;
-}): string {
-  const fmt = (n: number | null) => (n == null ? "n/a" : `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`);
-  const lines: string[] = [];
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-  lines.push(`TODAY: ${new Date().toISOString().slice(0, 10)} (post-close)`);
-  lines.push("");
-  lines.push("MARKET SNAPSHOT (today's close):");
-  for (const m of args.marketSnapshot) {
-    lines.push(`  ${m.label} (${m.symbol}): ${m.price != null ? `$${m.price.toFixed(2)}` : "n/a"}, ${fmt(m.changePct)}`);
+function fmtPct(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "N/A";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(2)}%`;
+}
+
+function normalizeTone(s: unknown): "Bullish" | "Bearish" | "Mixed" | "Risk-Off" | "Risk-On" {
+  const v = String(s ?? "").trim();
+  if (["Bullish", "Bearish", "Mixed", "Risk-Off", "Risk-On"].includes(v)) {
+    return v as "Bullish" | "Bearish" | "Mixed" | "Risk-Off" | "Risk-On";
   }
+  return "Mixed";
+}
 
-  if (args.bookMoves.length > 0) {
-    lines.push("");
-    lines.push("USER'S BOOK (today's moves):");
-    for (const b of args.bookMoves.slice(0, 12)) {
-      const name = args.tickerNames.get(b.symbol);
-      lines.push(`  ${b.symbol}${name ? ` (${name})` : ""} T${b.tier ?? "?"}: ${fmt(b.changePct)} @ $${b.price?.toFixed(2) ?? "?"}`);
+// Compute month-to-date and year-to-date returns from a daily price history.
+function computeMtdReturn(history: Array<{ date: string; close: number }>): number | null {
+  if (history.length < 2) return null;
+  const last = history[history.length - 1];
+  const lastDate = new Date(last.date);
+  // Find the last close in the previous month.
+  const firstOfMonth = new Date(Date.UTC(lastDate.getUTCFullYear(), lastDate.getUTCMonth(), 1)).toISOString().slice(0, 10);
+  // Use the close immediately BEFORE the first of the current month as the baseline.
+  let baseline: number | null = null;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].date < firstOfMonth) {
+      baseline = history[i].close;
+      break;
     }
   }
+  if (baseline == null || baseline <= 0) return null;
+  return (last.close / baseline - 1) * 100;
+}
 
-  if (args.flips.length > 0) {
-    lines.push("");
-    lines.push("THESIS STATUS CHANGES TODAY:");
-    for (const f of args.flips) {
-      lines.push(`  ${f.symbol}: ${f.from} → ${f.to}`);
+function computeYtdReturn(history: Array<{ date: string; close: number }>): number | null {
+  if (history.length < 2) return null;
+  const last = history[history.length - 1];
+  const lastDate = new Date(last.date);
+  const firstOfYear = new Date(Date.UTC(lastDate.getUTCFullYear(), 0, 1)).toISOString().slice(0, 10);
+  let baseline: number | null = null;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].date < firstOfYear) {
+      baseline = history[i].close;
+      break;
     }
   }
-
-  if (args.upcomingEarnings.length > 0) {
-    lines.push("");
-    lines.push("EARNINGS NEXT 2 DAYS:");
-    for (const e of args.upcomingEarnings) {
-      lines.push(`  ${e.symbol} on ${e.date}${e.timing ? ` (${e.timing})` : ""}`);
-    }
+  // If we don't have data from before the year started, fall back to the oldest available.
+  if (baseline == null) {
+    baseline = history[0].close;
   }
-
-  if (args.macroTomorrow.length > 0) {
-    lines.push("");
-    lines.push("MACRO EVENTS NEXT 2 DAYS:");
-    for (const m of args.macroTomorrow) {
-      lines.push(`  ${m.date}: ${m.label}`);
-    }
-  }
-
-  if (args.liveAnswer) {
-    lines.push("");
-    lines.push("LIVE MARKET CONTEXT (Tavily summary):");
-    lines.push(args.liveAnswer);
-  }
-  if (args.liveHeadlines.length > 0) {
-    lines.push("");
-    lines.push("LIVE HEADLINES:");
-    for (const h of args.liveHeadlines.slice(0, 6)) {
-      lines.push(`  - ${h.title}`);
-      if (h.content) lines.push(`    ${h.content.slice(0, 240)}`);
-    }
-  }
-
-  lines.push("");
-  lines.push("Produce the JSON brief now. Be terse, opinionated, specific. Skip filler.");
-
-  return lines.join("\n");
+  if (baseline == null || baseline <= 0) return null;
+  return (last.close / baseline - 1) * 100;
 }
